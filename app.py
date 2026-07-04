@@ -177,9 +177,13 @@ def index():
     user = session.get('user')
     return render_template('index.html', user=user)
 
+
 @app.route('/login')
 def login():
+    print(f"CLIENT_ID: {os.getenv('GOOGLE_CLIENT_ID')}")
+    print(f"SECRET: {os.getenv('GOOGLE_CLIENT_SECRET')[:5] if os.getenv('GOOGLE_CLIENT_SECRET') else 'NONE'}")
     return google.authorize_redirect(url_for('callback', _external=True))
+
 
 @app.route('/callback')
 def callback():
@@ -261,6 +265,7 @@ def manage_templates():
     return render_template('templates.html', templates=templates)
 
 @app.route('/templates/delete/<int:template_id>', methods=['POST'])
+
 def delete_template(template_id):
     templates = load_templates()
     templates = [t for t in templates if t['id'] != template_id]
