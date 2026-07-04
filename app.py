@@ -7,6 +7,7 @@ from authlib.integrations.flask_client import OAuth
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 import anthropic
+from flask_session import Session
 
 load_dotenv()
 
@@ -15,6 +16,9 @@ app.secret_key = 'marina-email-agent-2026-super-secret-key'
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = '/tmp/flask_sessions'
+Session(app)
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
