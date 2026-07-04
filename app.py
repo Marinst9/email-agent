@@ -11,8 +11,7 @@ import anthropic
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'email-agent-secret-123'
-
+app.secret_key = os.environ.get('SECRET_KEY', 'email-agent-secret-123')
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
