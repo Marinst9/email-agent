@@ -12,6 +12,9 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = 'marina-email-agent-2026-super-secret-key'
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
