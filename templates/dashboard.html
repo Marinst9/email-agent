@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar-links { display: flex; gap: 15px; align-items: center; }
+        .navbar-links a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; transition: all 0.2s; }
+        .navbar-links a:hover { background: #2a2a4a; color: #fff; }
+        .btn-stop { background: #e74c3c; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+        .btn-stop:hover { background: #c0392b; }
+        .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; text-align: center; }
+        .stat-card .number { font-size: 2rem; font-weight: bold; color: #667eea; }
+        .stat-card .label { color: #aaa; font-size: 0.9rem; margin-top: 5px; }
+        .mode-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; }
+        .mode-auto { background: #27ae60; }
+        .mode-manual { background: #e67e22; }
+        .section { margin-bottom: 30px; }
+        .section h2 { font-size: 1.2rem; margin-bottom: 15px; color: #ddd; }
+        .email-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 15px; }
+        .email-card .sender { font-weight: bold; color: #667eea; margin-bottom: 5px; }
+        .email-card .subject { font-size: 0.95rem; margin-bottom: 10px; color: #ddd; }
+        .email-card .body-preview { font-size: 0.85rem; color: #888; margin-bottom: 15px; background: #0f0f1a; padding: 10px; border-radius: 8px; }
+        .email-card .response-box { background: #1e2e1e; border: 1px solid #2d5a2d; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 0.9rem; color: #90ee90; }
+        .email-card .source { font-size: 0.8rem; color: #888; margin-bottom: 12px; }
+        .actions { display: flex; gap: 10px; }
+        .btn-approve { background: #27ae60; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+        .btn-approve:hover { background: #229954; }
+        .btn-reject { background: #e74c3c; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+        .btn-reject:hover { background: #c0392b; }
+        .processed-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 15px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .status-sent { color: #27ae60; font-size: 0.85rem; }
+        .status-rejected { color: #e74c3c; font-size: 0.85rem; }
+        .empty { text-align: center; color: #555; padding: 40px; }
+        .pulse { display: inline-block; width: 8px; height: 8px; background: #27ae60; border-radius: 50%; margin-right: 8px; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent</h1>
+        <div class="navbar-links">
+            <a href="/templates">⚙️ Шаблони</a>
+            <form action="/stop" method="POST" style="display:inline">
+                <button type="submit" class="btn-stop">⏹ Стопирај</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number">{{ state.pending|length }}</div>
+                <div class="label">Чекаат одобрување</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ state.processed|length }}</div>
+                <div class="label">Обработени</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">
+                    <span class="mode-badge {{ 'mode-auto' if state.auto_mode else 'mode-manual' }}">
+                        {{ '🤖 Автоматски' if state.auto_mode else '✋ Со потврда' }}
+                    </span>
+                </div>
+                <div class="label">Режим</div>
+            </div>
+        </div>
+
+        {% if state.pending %}
+        <div class="section">
+            <h2><span class="pulse"></span>Чекаат одобрување ({{ state.pending|length }})</h2>
+            {% for email in state.pending %}
+            <div class="email-card">
+                <div class="sender">{{ email.sender }}</div>
+                <div class="subject">{{ email.subject }}</div>
+                <div class="body-preview">{{ email.body }}</div>
+                <div class="source">{{ email.source }}</div>
+                <div class="response-box">{{ email.response }}</div>
+                <div class="actions">
+                    <form action="/approve/{{ email.id }}" method="POST">
+                        <button type="submit" class="btn-approve">✅ Одобри и испрати</button>
+                    </form>
+                    <form action="/reject/{{ email.id }}" method="POST">
+                        <button type="submit" class="btn-reject">❌ Одбиј</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="section">
+            <h2>📋 Обработени мејлови</h2>
+            {% if state.processed %}
+                {% for email in state.processed|reverse %}
+                <div class="processed-card">
+                    <div>
+                        <div style="font-size:0.9rem; color:#ddd;">{{ email.subject }}</div>
+                        <div style="font-size:0.8rem; color:#888;">{{ email.sender }}</div>
+                    </div>
+                    <div class="{{ 'status-sent' if email.status == 'испратено' else 'status-rejected' }}">
+                        {{ '✅ ' if email.status == 'испратено' else '❌ ' }}{{ email.status }}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty">Сè уште нема обработени мејлови</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        // Автоматски освежи на секои 30 секунди
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>

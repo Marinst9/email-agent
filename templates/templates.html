@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Шаблони - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; }
+        .navbar a:hover { background: #2a2a4a; color: #fff; }
+        .container { max-width: 900px; margin: 30px auto; padding: 0 20px; }
+        .form-card { background: #1a1a2e; border: 1px solid #333; border-radius: 16px; padding: 30px; margin-bottom: 30px; }
+        .form-card h2 { margin-bottom: 20px; color: #ddd; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 6px; color: #aaa; font-size: 0.9rem; }
+        .form-group input, .form-group textarea { width: 100%; background: #0f0f1a; border: 1px solid #333; border-radius: 8px; padding: 10px 15px; color: #fff; font-size: 0.95rem; }
+        .form-group input:focus, .form-group textarea:focus { outline: none; border-color: #667eea; }
+        .form-group textarea { min-height: 100px; resize: vertical; }
+        .btn-add { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 12px 30px; border-radius: 8px; cursor: pointer; font-size: 1rem; }
+        .btn-add:hover { opacity: 0.9; }
+        .template-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 15px; }
+        .template-card .name { font-size: 1.1rem; font-weight: bold; color: #667eea; margin-bottom: 8px; }
+        .keywords { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .keyword { background: #2a2a4a; padding: 3px 10px; border-radius: 20px; font-size: 0.8rem; color: #aaa; }
+        .response-preview { background: #0f0f1a; border-radius: 8px; padding: 12px; font-size: 0.9rem; color: #ddd; margin-bottom: 12px; }
+        .btn-delete { background: #e74c3c; color: white; border: none; padding: 6px 15px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        .btn-delete:hover { background: #c0392b; }
+        .hint { font-size: 0.8rem; color: #666; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent</h1>
+        <a href="/dashboard">← Назад кон Dashboard</a>
+    </div>
+
+    <div class="container">
+        <div class="form-card">
+            <h2>➕ Додај нов шаблон</h2>
+            <form action="/templates" method="POST">
+                <div class="form-group">
+                    <label>Име на шаблонот</label>
+                    <input type="text" name="name" placeholder="пр. Консултации, Состанок, Барање..." required>
+                </div>
+                <div class="form-group">
+                    <label>Клучни зборови (одделени со запирка)</label>
+                    <input type="text" name="keywords" placeholder="пр. консултации, consultation, термин, meeting" required>
+                    <div class="hint">Кога мејлот содржи некој од овие зборови, овој шаблон ќе се користи</div>
+                </div>
+                <div class="form-group">
+                    <label>Текст на одговорот</label>
+                    <textarea name="response" placeholder="Здраво, благодарам за пораката. Слободен/на сум..." required></textarea>
+                </div>
+                <button type="submit" class="btn-add">➕ Додај шаблон</button>
+            </form>
+        </div>
+
+        <h2 style="margin-bottom: 15px; color: #ddd;">📋 Постоечки шаблони</h2>
+        {% for template in templates %}
+        <div class="template-card">
+            <div class="name">{{ template.name }}</div>
+            <div class="keywords">
+                {% for keyword in template.keywords %}
+                <span class="keyword">{{ keyword }}</span>
+                {% endfor %}
+            </div>
+            <div class="response-preview">{{ template.response }}</div>
+            <form action="/templates/delete/{{ template.id }}" method="POST">
+                <button type="submit" class="btn-delete">🗑 Избриши</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
