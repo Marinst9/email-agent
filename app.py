@@ -59,6 +59,20 @@ agent_state = {
 }
 
 templates_file = 'templates_data.json'
+BLOCKED_FILE = 'blocked_senders.json'
+
+def load_blocked():
+    default = ['noreply', 'no-reply', 'donotreply', 'do-not-reply',
+               'newsletter', 'notifications', 'notification', 'mailer',
+               'automated', 'bounce', 'railway']
+    if os.path.exists(BLOCKED_FILE):
+        with open(BLOCKED_FILE, 'r') as f:
+            return json.load(f)
+    return default
+
+def save_blocked(blocked):
+    with open(BLOCKED_FILE, 'w') as f:
+        json.dump(blocked, f)
 
 def load_templates():
     if os.path.exists(templates_file):
@@ -75,11 +89,8 @@ def save_templates(templates):
         json.dump(templates, f, ensure_ascii=False, indent=2)
 
 def is_automated_email(sender):
-    automated = ['noreply', 'no-reply', 'donotreply', 'do-not-reply',
-             'newsletter', 'notifications', 'notification', 'mailer',
-             'automated', 'bounce', 'zara', 'pinterest', 'binance',
-             'linkedin', 'upwork', 'airbnb', 'express@airbnb']
-    return any(word in sender.lower() for word in automated)
+    blocked = load_blocked()
+    return any(word in sender.lower() for word in blocked)
 
 def find_matching_template(subject, body, templates):
     text = (subject + ' ' + body).lower()
@@ -327,6 +338,26 @@ def history():
     user_email = session.get('user', {}).get('email', '')
     logs = EmailLog.query.filter_by(user_email=user_email).order_by(EmailLog.timestamp.desc()).all()
     return render_template('history.html', logs=logs)
+
+@app.route('/blocked', methods=['GET', 'POST'])
+def manage_blocked():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    blocked = load_blocked()
+    if request.method == 'POST':
+        word = request.form.get('word', '').strip().lower()
+        if word and word not in blocked:
+            blocked.append(word)
+            save_blocked(blocked)
+        return redirect(url_for('manage_blocked'))
+    return render_template('blocked.html', blocked=blocked)
+
+@app.route('/blocked/delete/<word>', methods=['POST'])
+def delete_blocked(word):
+    blocked = load_blocked()
+    blocked = [b for b in blocked if b != word]
+    save_blocked(blocked)
+    return redirect(url_for('manage_blocked'))
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
