@@ -187,9 +187,9 @@ def index():
 
 @app.route('/login')
 def login():
-    print(f"CLIENT_ID: {os.getenv('GOOGLE_CLIENT_ID')}")
-    print(f"SECRET: {os.getenv('GOOGLE_CLIENT_SECRET')[:5] if os.getenv('GOOGLE_CLIENT_SECRET') else 'NONE'}")
-    return google.authorize_redirect(url_for('callback', _external=True))
+
+    redirect_uri = 'https://web-production-ec2fb.up.railway.app/callback'
+    return google.authorize_redirect(redirect_uri)
 
 
 @app.route('/callback')
