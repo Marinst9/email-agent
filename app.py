@@ -8,6 +8,8 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 import anthropic
 from flask_session import Session
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
 
 load_dotenv()
 
@@ -18,8 +20,25 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = '/tmp/flask_sessions'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///emails.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 Session(app)
 oauth = OAuth(app)
+
+class EmailLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    sender = db.Column(db.String(200))
+    subject = db.Column(db.String(300))
+    response = db.Column(db.Text)
+    source = db.Column(db.String(50))
+    status = db.Column(db.String(20))
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+with app.app_context():
+    db.create_all()
+
 google = oauth.register(
     name='google',
     client_id=os.getenv('GOOGLE_CLIENT_ID'),
@@ -58,7 +77,7 @@ def save_templates(templates):
 def is_automated_email(sender):
     automated = ['noreply', 'no-reply', 'donotreply', 'do-not-reply',
              'newsletter', 'notifications', 'notification', 'mailer',
-             'automated', 'bounce', 'zara', 'pinterest', 'binance', 
+             'automated', 'bounce', 'zara', 'pinterest', 'binance',
              'linkedin', 'upwork', 'airbnb', 'express@airbnb']
     return any(word in sender.lower() for word in automated)
 
@@ -104,7 +123,6 @@ from email.mime.text import MIMEText
 
 def get_unread_emails(service):
     results = service.users().messages().list(userId='me', q='is:unread newer_than:1d').execute()
-
     return results.get('messages', [])
 
 def get_email_content(service, msg_id):
@@ -116,11 +134,9 @@ def get_email_content(service, msg_id):
     if 'parts' in msg['payload']:
         for part in msg['payload']['parts']:
             if part['mimeType'] == 'text/plain' and 'data' in part.get('body', {}):
-              body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
-
+                body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
     elif 'body' in msg['payload'] and 'data' in msg['payload']['body']:
-       body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
-
+        body = base64.urlsafe_b64decode(msg['payload']['body']['data']).decode('utf-8', errors='ignore')
     return subject, sender, body
 
 def send_reply(service, sender, subject, message_text):
@@ -136,7 +152,7 @@ def mark_as_read(service, msg_id):
         body={'removeLabelIds': ['UNREAD']}
     ).execute()
 
-def agent_loop(token):
+def agent_loop(token, user_email):
     import time
     service = get_gmail_service_from_token(token)
     while agent_state['running']:
@@ -165,12 +181,18 @@ def agent_loop(token):
                     'subject': subject,
                     'body': body[:300],
                     'response': response_text,
-                    'source': source
+                    'source': source,
+                    'user_email': user_email
                 }
                 if agent_state['auto_mode']:
                     send_reply(service, sender, subject, response_text)
                     mark_as_read(service, email['id'])
                     agent_state['processed'].append({**email_data, 'status': 'испратено'})
+                    with app.app_context():
+                        log = EmailLog(user_email=user_email, sender=sender, subject=subject,
+                                      response=response_text, source=source, status='испратено')
+                        db.session.add(log)
+                        db.session.commit()
                 else:
                     if not any(p['id'] == email['id'] for p in agent_state['pending']):
                         agent_state['pending'].append(email_data)
@@ -184,13 +206,10 @@ def index():
     user = session.get('user')
     return render_template('index.html', user=user)
 
-
 @app.route('/login')
 def login():
-
     redirect_uri = 'https://web-production-ec2fb.up.railway.app/callback'
     return google.authorize_redirect(redirect_uri)
-
 
 @app.route('/callback')
 def callback():
@@ -216,7 +235,8 @@ def start():
     agent_state['pending'] = []
     agent_state['processed'] = []
     token = session.get('token')
-    thread = threading.Thread(target=agent_loop, args=(token,), daemon=True)
+    user_email = session.get('user', {}).get('email', '')
+    thread = threading.Thread(target=agent_loop, args=(token, user_email), daemon=True)
     thread.start()
     return redirect(url_for('dashboard'))
 
@@ -229,7 +249,9 @@ def stop():
 def dashboard():
     if not session.get('user'):
         return redirect(url_for('login'))
-    return render_template('dashboard.html', state=agent_state, user=session.get('user'))
+    user_email = session.get('user', {}).get('email', '')
+    logs = EmailLog.query.filter_by(user_email=user_email).order_by(EmailLog.timestamp.desc()).limit(50).all()
+    return render_template('dashboard.html', state=agent_state, user=session.get('user'), logs=logs)
 
 @app.route('/approve/<email_id>', methods=['POST'])
 def approve(email_id):
@@ -241,6 +263,16 @@ def approve(email_id):
             mark_as_read(service, email_id)
             agent_state['pending'].remove(email)
             agent_state['processed'].append({**email, 'status': 'испратено'})
+            log = EmailLog(
+                user_email=session.get('user', {}).get('email', ''),
+                sender=email['sender'],
+                subject=email['subject'],
+                response=email['response'],
+                source=email['source'],
+                status='испратено'
+            )
+            db.session.add(log)
+            db.session.commit()
             break
     return redirect(url_for('dashboard'))
 
@@ -253,6 +285,16 @@ def reject(email_id):
             mark_as_read(service, email_id)
             agent_state['pending'].remove(email)
             agent_state['processed'].append({**email, 'status': 'одбиено'})
+            log = EmailLog(
+                user_email=session.get('user', {}).get('email', ''),
+                sender=email['sender'],
+                subject=email['subject'],
+                response=email['response'],
+                source=email['source'],
+                status='одбиено'
+            )
+            db.session.add(log)
+            db.session.commit()
             break
     return redirect(url_for('dashboard'))
 
@@ -272,12 +314,19 @@ def manage_templates():
     return render_template('templates.html', templates=templates)
 
 @app.route('/templates/delete/<int:template_id>', methods=['POST'])
-
 def delete_template(template_id):
     templates = load_templates()
     templates = [t for t in templates if t['id'] != template_id]
     save_templates(templates)
     return redirect(url_for('manage_templates'))
 
+@app.route('/history')
+def history():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    user_email = session.get('user', {}).get('email', '')
+    logs = EmailLog.query.filter_by(user_email=user_email).order_by(EmailLog.timestamp.desc()).all()
+    return render_template('history.html', logs=logs)
+
 if __name__ == '__main__':
-  app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
