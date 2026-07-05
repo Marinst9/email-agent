@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, j
 import os
 import json
 import threading
+import time
 from dotenv import load_dotenv
 from authlib.integrations.flask_client import OAuth
 from googleapiclient.discovery import build
@@ -34,6 +35,7 @@ class EmailLog(db.Model):
     response = db.Column(db.Text)
     source = db.Column(db.String(50))
     status = db.Column(db.String(20))
+    category = db.Column(db.String(50))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 with app.app_context():
@@ -60,6 +62,20 @@ agent_state = {
 
 templates_file = 'templates_data.json'
 BLOCKED_FILE = 'blocked_senders.json'
+
+# Заштита од бесконечна јамка
+reply_counter = {}
+
+def can_reply_to(sender_email):
+    now = time.time()
+    hour_ago = now - 3600
+    if sender_email not in reply_counter:
+        reply_counter[sender_email] = []
+    reply_counter[sender_email] = [t for t in reply_counter[sender_email] if t > hour_ago]
+    if len(reply_counter[sender_email]) >= 3:
+        return False
+    reply_counter[sender_email].append(now)
+    return True
 
 def load_blocked():
     default = ['noreply', 'no-reply', 'donotreply', 'do-not-reply',
@@ -99,6 +115,20 @@ def find_matching_template(subject, body, templates):
             if keyword.lower() in text:
                 return template
     return None
+
+def categorize_email(subject, sender, body):
+    response = ai_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=100,
+        system="""Категоризирај го мејлот во ЕДНА од категориите:
+INQUIRY - општо прашање
+COMPLAINT - жалба или незадоволство
+URGENT_HUMAN - итно, бара човечка интервенција
+SPAM - нежелена пошта
+Врати САМО категоријата, ништо друго.""",
+        messages=[{"role": "user", "content": f"Од: {sender}\nНаслов: {subject}\nСодржина: {body[:200]}"}]
+    )
+    return response.content[0].text.strip()
 
 def ai_decide(subject, sender, body):
     response = ai_client.messages.create(
@@ -164,7 +194,6 @@ def mark_as_read(service, msg_id):
     ).execute()
 
 def agent_loop(token, user_email):
-    import time
     service = get_gmail_service_from_token(token)
     while agent_state['running']:
         try:
@@ -172,9 +201,44 @@ def agent_loop(token, user_email):
             templates = load_templates()
             for email in emails:
                 subject, sender, body = get_email_content(service, email['id'])
+
+                # 1. Провери блокирани
                 if is_automated_email(sender):
                     mark_as_read(service, email['id'])
                     continue
+
+                # 2. Заштита од јамка
+                if not can_reply_to(sender):
+                    print(f"⚠️ Rate limit за {sender}")
+                    mark_as_read(service, email['id'])
+                    continue
+
+                # 3. Категоризација
+                category = categorize_email(subject, sender, body)
+                print(f"📂 Категорија: {category}")
+
+                # 4. Ако бара човечка интервенција
+                if 'URGENT_HUMAN' in category or 'COMPLAINT' in category:
+                    email_data = {
+                        'id': email['id'],
+                        'sender': sender,
+                        'subject': subject,
+                        'body': body[:300],
+                        'response': '⚠️ Овој мејл бара човечка интервенција!',
+                        'source': f'Категорија: {category}',
+                        'user_email': user_email,
+                        'category': category
+                    }
+                    if not any(p['id'] == email['id'] for p in agent_state['pending']):
+                        agent_state['pending'].append(email_data)
+                    continue
+
+                # 5. Ако е спам
+                if 'SPAM' in category:
+                    mark_as_read(service, email['id'])
+                    continue
+
+                # 6. Провери шаблони
                 matched = find_matching_template(subject, body, templates)
                 if matched:
                     response_text = matched['response']
@@ -186,6 +250,7 @@ def agent_loop(token, user_email):
                         continue
                     response_text = decision.split('ПОРАКА:')[-1].strip()
                     source = "AI генериран"
+
                 email_data = {
                     'id': email['id'],
                     'sender': sender,
@@ -193,20 +258,24 @@ def agent_loop(token, user_email):
                     'body': body[:300],
                     'response': response_text,
                     'source': source,
-                    'user_email': user_email
+                    'user_email': user_email,
+                    'category': category
                 }
+
                 if agent_state['auto_mode']:
                     send_reply(service, sender, subject, response_text)
                     mark_as_read(service, email['id'])
                     agent_state['processed'].append({**email_data, 'status': 'испратено'})
                     with app.app_context():
                         log = EmailLog(user_email=user_email, sender=sender, subject=subject,
-                                      response=response_text, source=source, status='испратено')
+                                      response=response_text, source=source, status='испратено',
+                                      category=category)
                         db.session.add(log)
                         db.session.commit()
                 else:
                     if not any(p['id'] == email['id'] for p in agent_state['pending']):
                         agent_state['pending'].append(email_data)
+
             time.sleep(60)
         except Exception as e:
             print(f"Грешка: {e}")
@@ -280,7 +349,8 @@ def approve(email_id):
                 subject=email['subject'],
                 response=email['response'],
                 source=email['source'],
-                status='испратено'
+                status='испратено',
+                category=email.get('category', '')
             )
             db.session.add(log)
             db.session.commit()
@@ -302,7 +372,8 @@ def reject(email_id):
                 subject=email['subject'],
                 response=email['response'],
                 source=email['source'],
-                status='одбиено'
+                status='одбиено',
+                category=email.get('category', '')
             )
             db.session.add(log)
             db.session.commit()
