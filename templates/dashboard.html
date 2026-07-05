@@ -28,9 +28,16 @@
         .email-card .sender { font-weight: bold; color: #667eea; margin-bottom: 5px; }
         .email-card .subject { font-size: 0.95rem; margin-bottom: 10px; color: #ddd; }
         .email-card .body-preview { font-size: 0.85rem; color: #888; margin-bottom: 15px; background: #0f0f1a; padding: 10px; border-radius: 8px; }
-        .email-card .response-box { background: #1e2e1e; border: 1px solid #2d5a2d; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 0.9rem; color: #90ee90; }
-        .email-card .source { font-size: 0.8rem; color: #888; margin-bottom: 12px; }
-        .actions { display: flex; gap: 10px; }
+        .email-card .source { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
+        .category-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; margin-bottom: 12px; }
+        .cat-inquiry { background: #1a3a5c; color: #5dade2; }
+        .cat-complaint { background: #5c1a1a; color: #e74c3c; }
+        .cat-urgent { background: #5c3a1a; color: #f39c12; }
+        .cat-spam { background: #2a2a2a; color: #aaa; }
+        .response-edit { width: 100%; background: #0d1f0d; color: #90ee90; border: 1px solid #2d5a2d; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 0.9rem; min-height: 100px; resize: vertical; font-family: 'Segoe UI', sans-serif; }
+        .response-edit:focus { outline: none; border-color: #27ae60; }
+        .edit-hint { font-size: 0.75rem; color: #666; margin-bottom: 10px; }
+        .actions { display: flex; gap: 10px; align-items: center; }
         .btn-approve { background: #27ae60; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
         .btn-approve:hover { background: #229954; }
         .btn-reject { background: #e74c3c; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
@@ -48,8 +55,8 @@
         <h1>📧 Email AI Agent</h1>
         <div class="navbar-links">
             <a href="/templates">⚙️ Шаблони</a>
-                <a href="/history">📋 Историја</a>
-                <a href="/blocked">🚫 Блокирани</a>
+            <a href="/history">📋 Историја</a>
+            <a href="/blocked">🚫 Блокирани</a>
             <form action="/stop" method="POST" style="display:inline">
                 <button type="submit" class="btn-stop">⏹ Стопирај</button>
             </form>
@@ -85,15 +92,19 @@
                 <div class="subject">{{ email.subject }}</div>
                 <div class="body-preview">{{ email.body }}</div>
                 <div class="source">{{ email.source }}</div>
-                <div class="response-box">{{ email.response }}</div>
-                <div class="actions">
-                    <form action="/approve/{{ email.id }}" method="POST">
+                {% if email.category %}
+                <span class="category-badge cat-{{ email.category|lower }}">{{ email.category }}</span>
+                {% endif %}
+                <div class="edit-hint">✏️ Можеш да го измениш одговорот пред да го испратиш:</div>
+                <form action="/approve/{{ email.id }}" method="POST">
+                    <textarea name="custom_response" class="response-edit">{{ email.response }}</textarea>
+                    <div class="actions">
                         <button type="submit" class="btn-approve">✅ Одобри и испрати</button>
-                    </form>
-                    <form action="/reject/{{ email.id }}" method="POST">
-                        <button type="submit" class="btn-reject">❌ Одбиј</button>
-                    </form>
-                </div>
+                    </div>
+                </form>
+                <form action="/reject/{{ email.id }}" method="POST" style="margin-top: 8px;">
+                    <button type="submit" class="btn-reject">❌ Одбиј</button>
+                </form>
             </div>
             {% endfor %}
         </div>
@@ -107,6 +118,9 @@
                     <div>
                         <div style="font-size:0.9rem; color:#ddd;">{{ email.subject }}</div>
                         <div style="font-size:0.8rem; color:#888;">{{ email.sender }}</div>
+                        {% if email.category %}
+                        <div style="font-size:0.75rem; color:#667eea; margin-top:3px;">{{ email.category }}</div>
+                        {% endif %}
                     </div>
                     <div class="{{ 'status-sent' if email.status == 'испратено' else 'status-rejected' }}">
                         {{ '✅ ' if email.status == 'испратено' else '❌ ' }}{{ email.status }}
@@ -120,7 +134,6 @@
     </div>
 
     <script>
-        // Автоматски освежи на секои 30 секунди
         setTimeout(() => location.reload(), 30000);
     </script>
 </body>

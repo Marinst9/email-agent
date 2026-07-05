@@ -48,6 +48,18 @@ class ThreadMemory(db.Model):
     response = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+class UserTemplate(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    name = db.Column(db.String(100))
+    keywords = db.Column(db.String(500))
+    response = db.Column(db.Text)
+
+class BlockedSender(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    word = db.Column(db.String(100))
+
 with app.app_context():
     db.create_all()
 
@@ -62,9 +74,8 @@ google = oauth.register(
 )
 
 ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-# Повеќе корисници — state по корисник
 user_states = {}
+reply_counter = {}
 
 def get_user_state(user_email):
     if user_email not in user_states:
@@ -75,10 +86,6 @@ def get_user_state(user_email):
             'pending': []
         }
     return user_states[user_email]
-
-templates_file = 'templates_data.json'
-BLOCKED_FILE = 'blocked_senders.json'
-reply_counter = {}
 
 def can_reply_to(sender_email):
     now = time.time()
@@ -91,49 +98,55 @@ def can_reply_to(sender_email):
     reply_counter[sender_email].append(now)
     return True
 
-def load_blocked():
-    default = ['noreply', 'no-reply', 'donotreply', 'do-not-reply',
-               'newsletter', 'notifications', 'notification', 'mailer',
-               'automated', 'bounce', 'railway']
-    if os.path.exists(BLOCKED_FILE):
-        with open(BLOCKED_FILE, 'r') as f:
-            return json.load(f)
-    return default
+def init_user_defaults(user_email):
+    with app.app_context():
+        # Default блокирани
+        if not BlockedSender.query.filter_by(user_email=user_email).first():
+            defaults = ['noreply', 'no-reply', 'donotreply', 'newsletter',
+                       'notifications', 'notification', 'mailer', 'automated', 'bounce', 'railway']
+            for word in defaults:
+                db.session.add(BlockedSender(user_email=user_email, word=word))
+            db.session.commit()
 
-def save_blocked(blocked):
-    with open(BLOCKED_FILE, 'w') as f:
-        json.dump(blocked, f)
+        # Default шаблони
+        if not UserTemplate.query.filter_by(user_email=user_email).first():
+            defaults = [
+                {"name": "Консултации", "keywords": "консултации,consultation,meeting,состанок",
+                 "response": "Здраво, благодарам за пораката. Слободен/на сум за консултации во следните термини: понеделник и среда 10-12ч."},
+                {"name": "Потврда за прием", "keywords": "барање,request,апликација,application",
+                 "response": "Здраво, Ви потврдувам дека Вашето барање е примено. Ќе Ви одговориме во рок од 2 работни дена."},
+                {"name": "Недостапност", "keywords": "итно,urgent,помош,help",
+                 "response": "Здраво, во моментов не сум достапен/на. За итни работи контактирајте нè на друга адреса."}
+            ]
+            for d in defaults:
+                db.session.add(UserTemplate(user_email=user_email, name=d['name'],
+                                           keywords=d['keywords'], response=d['response']))
+            db.session.commit()
 
-def load_templates():
-    if os.path.exists(templates_file):
-        with open(templates_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return [
-        {"id": 1, "name": "Консултации", "keywords": ["консултации", "consultation", "meeting", "состанок"], "response": "Здраво, благодарам за пораката. Слободен/на сум за консултации во следните термини: понеделник и среда 10-12ч."},
-        {"id": 2, "name": "Потврда за прием", "keywords": ["барање", "request", "апликација", "application"], "response": "Здраво, Ви потврдувам дека Вашето барање е примено. Ќе Ви одговориме во рок од 2 работни дена."},
-        {"id": 3, "name": "Недостапност", "keywords": ["итно", "urgent", "помош", "help"], "response": "Здраво, во моментов не сум достапен/на. За итни работи контактирајте нè на друга адреса."}
-    ]
+def load_blocked_for_user(user_email):
+    blocked = BlockedSender.query.filter_by(user_email=user_email).all()
+    return [b.word for b in blocked]
 
-def save_templates(templates):
-    with open(templates_file, 'w', encoding='utf-8') as f:
-        json.dump(templates, f, ensure_ascii=False, indent=2)
+def load_templates_for_user(user_email):
+    templates = UserTemplate.query.filter_by(user_email=user_email).all()
+    return [{'id': t.id, 'name': t.name,
+             'keywords': t.keywords.split(','), 'response': t.response} for t in templates]
 
-def is_automated_email(sender):
-    blocked = load_blocked()
+def is_automated_email(sender, user_email):
+    blocked = load_blocked_for_user(user_email)
     return any(word in sender.lower() for word in blocked)
 
 def find_matching_template(subject, body, templates):
     text = (subject + ' ' + body).lower()
     for template in templates:
         for keyword in template['keywords']:
-            if keyword.lower() in text:
+            if keyword.strip().lower() in text:
                 return template
     return None
 
 def get_thread_history(user_email, thread_id):
     memories = ThreadMemory.query.filter_by(
-        user_email=user_email,
-        thread_id=thread_id
+        user_email=user_email, thread_id=thread_id
     ).order_by(ThreadMemory.timestamp.desc()).limit(5).all()
     return memories
 
@@ -223,28 +236,15 @@ def mark_as_read(service, msg_id):
 
 def save_to_log(user_email, sender, subject, response_text, source, status, category):
     with app.app_context():
-        log = EmailLog(
-            user_email=user_email,
-            sender=sender,
-            subject=subject,
-            response=response_text,
-            source=source,
-            status=status,
-            category=category
-        )
+        log = EmailLog(user_email=user_email, sender=sender, subject=subject,
+                      response=response_text, source=source, status=status, category=category)
         db.session.add(log)
         db.session.commit()
 
 def save_thread_memory(user_email, thread_id, sender, subject, body, response_text):
     with app.app_context():
-        mem = ThreadMemory(
-            user_email=user_email,
-            thread_id=thread_id,
-            sender=sender,
-            subject=subject,
-            body=body[:500],
-            response=response_text[:500]
-        )
+        mem = ThreadMemory(user_email=user_email, thread_id=thread_id, sender=sender,
+                          subject=subject, body=body[:500], response=response_text[:500])
         db.session.add(mem)
         db.session.commit()
 
@@ -255,15 +255,18 @@ def agent_loop(token, user_email):
     while state['running']:
         try:
             emails = get_unread_emails(service)
-            templates = load_templates()
+
+            with app.app_context():
+                templates = load_templates_for_user(user_email)
 
             for email in emails:
                 subject, sender, body, thread_id = get_email_content(service, email['id'])
 
-                if is_automated_email(sender):
-                    mark_as_read(service, email['id'])
-                    save_to_log(user_email, sender, subject, '', 'Автоматски', 'игнориран', 'AUTO')
-                    continue
+                with app.app_context():
+                    if is_automated_email(sender, user_email):
+                        mark_as_read(service, email['id'])
+                        save_to_log(user_email, sender, subject, '', 'Автоматски', 'игнориран', 'AUTO')
+                        continue
 
                 if not can_reply_to(sender):
                     print(f"⚠️ Rate limit за {sender}")
@@ -293,11 +296,10 @@ def agent_loop(token, user_email):
                     save_to_log(user_email, sender, subject, '', 'Автоматски', 'спам', 'SPAM')
                     continue
 
-                # Земи историја на конверзацијата
                 with app.app_context():
                     thread_history = get_thread_history(user_email, thread_id)
+                    matched = find_matching_template(subject, body, templates)
 
-                matched = find_matching_template(subject, body, templates)
                 if matched:
                     response_text = matched['response']
                     source = f"Шаблон: {matched['name']}"
@@ -353,6 +355,8 @@ def callback():
     user_info = token.get('userinfo')
     session['user'] = user_info
     session['token'] = token
+    with app.app_context():
+        init_user_defaults(user_info['email'])
     return redirect(url_for('index'))
 
 @app.route('/logout')
@@ -400,16 +404,18 @@ def approve(email_id):
     state = get_user_state(user_email)
     token = session.get('token')
     service = get_gmail_service_from_token(token)
+    custom_response = request.form.get('custom_response')
     for email in state['pending']:
         if email['id'] == email_id:
-            send_reply(service, email['sender'], email['subject'], email['response'])
+            final_response = custom_response if custom_response else email['response']
+            send_reply(service, email['sender'], email['subject'], final_response)
             mark_as_read(service, email_id)
             state['pending'].remove(email)
             state['processed'].append({**email, 'status': 'испратено'})
             save_to_log(user_email, email['sender'], email['subject'],
-                       email['response'], email['source'], 'испратено', email.get('category', ''))
+                       final_response, email['source'], 'испратено', email.get('category', ''))
             save_thread_memory(user_email, email.get('thread_id', ''), email['sender'],
-                             email['subject'], email['body'], email['response'])
+                             email['subject'], email['body'], final_response)
             break
     return redirect(url_for('dashboard'))
 
@@ -433,22 +439,24 @@ def reject(email_id):
 def manage_templates():
     if not session.get('user'):
         return redirect(url_for('login'))
-    templates = load_templates()
+    user_email = session.get('user', {}).get('email', '')
+    templates = UserTemplate.query.filter_by(user_email=user_email).all()
     if request.method == 'POST':
         name = request.form.get('name')
-        keywords = [k.strip() for k in request.form.get('keywords', '').split(',')]
+        keywords = request.form.get('keywords')
         response = request.form.get('response')
-        new_id = max([t['id'] for t in templates], default=0) + 1
-        templates.append({'id': new_id, 'name': name, 'keywords': keywords, 'response': response})
-        save_templates(templates)
+        db.session.add(UserTemplate(user_email=user_email, name=name,
+                                   keywords=keywords, response=response))
+        db.session.commit()
         return redirect(url_for('manage_templates'))
     return render_template('templates.html', templates=templates)
 
 @app.route('/templates/delete/<int:template_id>', methods=['POST'])
 def delete_template(template_id):
-    templates = load_templates()
-    templates = [t for t in templates if t['id'] != template_id]
-    save_templates(templates)
+    template = UserTemplate.query.get(template_id)
+    if template:
+        db.session.delete(template)
+        db.session.commit()
     return redirect(url_for('manage_templates'))
 
 @app.route('/history')
@@ -463,20 +471,23 @@ def history():
 def manage_blocked():
     if not session.get('user'):
         return redirect(url_for('login'))
-    blocked = load_blocked()
+    user_email = session.get('user', {}).get('email', '')
+    blocked = BlockedSender.query.filter_by(user_email=user_email).all()
     if request.method == 'POST':
         word = request.form.get('word', '').strip().lower()
-        if word and word not in blocked:
-            blocked.append(word)
-            save_blocked(blocked)
+        if word and not BlockedSender.query.filter_by(user_email=user_email, word=word).first():
+            db.session.add(BlockedSender(user_email=user_email, word=word))
+            db.session.commit()
         return redirect(url_for('manage_blocked'))
-    return render_template('blocked.html', blocked=blocked)
+    return render_template('blocked.html', blocked=[b.word for b in blocked])
 
 @app.route('/blocked/delete/<word>', methods=['POST'])
 def delete_blocked(word):
-    blocked = load_blocked()
-    blocked = [b for b in blocked if b != word]
-    save_blocked(blocked)
+    user_email = session.get('user', {}).get('email', '')
+    b = BlockedSender.query.filter_by(user_email=user_email, word=word).first()
+    if b:
+        db.session.delete(b)
+        db.session.commit()
     return redirect(url_for('manage_blocked'))
 
 if __name__ == '__main__':
