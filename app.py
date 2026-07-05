@@ -489,6 +489,24 @@ def delete_blocked(word):
         db.session.delete(b)
         db.session.commit()
     return redirect(url_for('manage_blocked'))
-
+@app.route('/stats')
+def stats():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    user_email = session.get('user', {}).get('email', '')
+    logs = EmailLog.query.filter_by(user_email=user_email).all()
+    total = len(logs)
+    isprateni = len([l for l in logs if l.status == 'испратено'])
+    odbieni = len([l for l in logs if l.status == 'одбиено'])
+    ignorirani = len([l for l in logs if l.status == 'игнориран'])
+    ai_gen = len([l for l in logs if l.source == 'AI генериран'])
+    shablon = len([l for l in logs if l.source and 'Шаблон' in l.source])
+    categories = {}
+    for log in logs:
+        cat = log.category or 'UNKNOWN'
+        categories[cat] = categories.get(cat, 0) + 1
+    return render_template('stats.html', total=total, isprateni=isprateni,
+        odbieni=odbieni, ignorirani=ignorirani, ai_gen=ai_gen,
+        shablon=shablon, categories=categories)
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
