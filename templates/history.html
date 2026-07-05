@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Историја - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; }
+        .navbar a:hover { background: #2a2a4a; color: #fff; }
+        .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+        h2 { margin-bottom: 20px; color: #ddd; }
+        table { width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 12px; overflow: hidden; }
+        th { background: #2a2a4a; padding: 12px 15px; text-align: left; color: #aaa; font-size: 0.9rem; }
+        td { padding: 12px 15px; border-bottom: 1px solid #2a2a3a; font-size: 0.9rem; }
+        tr:last-child td { border-bottom: none; }
+        .status-sent { color: #27ae60; }
+        .status-rejected { color: #e74c3c; }
+        .source-ai { color: #667eea; }
+        .source-template { color: #f39c12; }
+        .empty { text-align: center; color: #555; padding: 40px; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent</h1>
+        <a href="/dashboard">← Назад кон Dashboard</a>
+    </div>
+
+    <div class="container">
+        <h2>📋 Историја на мејлови</h2>
+        {% if logs %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Датум</th>
+                    <th>Испраќач</th>
+                    <th>Наслов</th>
+                    <th>Извор</th>
+                    <th>Статус</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.timestamp.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>{{ log.sender[:40] }}</td>
+                    <td>{{ log.subject[:50] }}</td>
+                    <td class="{{ 'source-ai' if log.source == 'AI генериран' else 'source-template' }}">{{ log.source }}</td>
+                    <td class="{{ 'status-sent' if log.status == 'испратено' else 'status-rejected' }}">
+                        {{ '✅ ' if log.status == 'испратено' else '❌ ' }}{{ log.status }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">Сè уште нема историја</div>
+        {% endif %}
+    </div>
+</body>
+</html>
