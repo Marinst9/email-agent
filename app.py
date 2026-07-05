@@ -38,6 +38,16 @@ class EmailLog(db.Model):
     category = db.Column(db.String(50))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+class ThreadMemory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    thread_id = db.Column(db.String(200))
+    sender = db.Column(db.String(200))
+    subject = db.Column(db.String(300))
+    body = db.Column(db.Text)
+    response = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
 with app.app_context():
     db.create_all()
 
@@ -53,17 +63,21 @@ google = oauth.register(
 
 ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-agent_state = {
-    'running': False,
-    'auto_mode': False,
-    'processed': [],
-    'pending': []
-}
+# Повеќе корисници — state по корисник
+user_states = {}
+
+def get_user_state(user_email):
+    if user_email not in user_states:
+        user_states[user_email] = {
+            'running': False,
+            'auto_mode': False,
+            'processed': [],
+            'pending': []
+        }
+    return user_states[user_email]
 
 templates_file = 'templates_data.json'
 BLOCKED_FILE = 'blocked_senders.json'
-
-# Заштита од бесконечна јамка
 reply_counter = {}
 
 def can_reply_to(sender_email):
@@ -116,6 +130,13 @@ def find_matching_template(subject, body, templates):
                 return template
     return None
 
+def get_thread_history(user_email, thread_id):
+    memories = ThreadMemory.query.filter_by(
+        user_email=user_email,
+        thread_id=thread_id
+    ).order_by(ThreadMemory.timestamp.desc()).limit(5).all()
+    return memories
+
 def categorize_email(subject, sender, body):
     response = ai_client.messages.create(
         model="claude-sonnet-4-6",
@@ -130,7 +151,13 @@ SPAM - нежелена пошта
     )
     return response.content[0].text.strip()
 
-def ai_decide(subject, sender, body):
+def ai_decide(subject, sender, body, thread_history=None):
+    history_text = ""
+    if thread_history:
+        history_text = "\nПРЕТХОДНИ ПОРАКИ ВО КОНВЕРЗАЦИЈАТА:\n"
+        for mem in reversed(thread_history):
+            history_text += f"- Примено: {mem.body[:100]}\n- Одговорено: {mem.response[:100]}\n\n"
+
     response = ai_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
@@ -144,7 +171,7 @@ def ai_decide(subject, sender, body):
 АКЦИЈА: ОДГОВОР или ПРЕПРАЌАЊЕ или ИГНОРИРАЈ
 АКО ПРЕПРАЌАЊЕ ДО: (email или НИКОЈ)
 ПОРАКА: (текст на одговорот)""",
-        messages=[{"role": "user", "content": f"Од: {sender}\nНаслов: {subject}\nСодржина: {body}"}]
+        messages=[{"role": "user", "content": f"{history_text}Од: {sender}\nНаслов: {subject}\nСодржина: {body}"}]
     )
     return response.content[0].text
 
@@ -171,6 +198,7 @@ def get_email_content(service, msg_id):
     headers = msg['payload']['headers']
     subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
     sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
+    thread_id = msg.get('threadId', '')
     body = ''
     if 'parts' in msg['payload']:
         for part in msg['payload']['parts']:
@@ -178,7 +206,7 @@ def get_email_content(service, msg_id):
                 body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
     elif 'body' in msg['payload'] and 'data' in msg['payload']['body']:
         body = base64.urlsafe_b64decode(msg['payload']['body']['data']).decode('utf-8', errors='ignore')
-    return subject, sender, body
+    return subject, sender, body, thread_id
 
 def send_reply(service, sender, subject, message_text):
     msg = MIMEText(message_text)
@@ -193,31 +221,57 @@ def mark_as_read(service, msg_id):
         body={'removeLabelIds': ['UNREAD']}
     ).execute()
 
+def save_to_log(user_email, sender, subject, response_text, source, status, category):
+    with app.app_context():
+        log = EmailLog(
+            user_email=user_email,
+            sender=sender,
+            subject=subject,
+            response=response_text,
+            source=source,
+            status=status,
+            category=category
+        )
+        db.session.add(log)
+        db.session.commit()
+
+def save_thread_memory(user_email, thread_id, sender, subject, body, response_text):
+    with app.app_context():
+        mem = ThreadMemory(
+            user_email=user_email,
+            thread_id=thread_id,
+            sender=sender,
+            subject=subject,
+            body=body[:500],
+            response=response_text[:500]
+        )
+        db.session.add(mem)
+        db.session.commit()
+
 def agent_loop(token, user_email):
     service = get_gmail_service_from_token(token)
-    while agent_state['running']:
+    state = get_user_state(user_email)
+
+    while state['running']:
         try:
             emails = get_unread_emails(service)
             templates = load_templates()
-            for email in emails:
-                subject, sender, body = get_email_content(service, email['id'])
 
-                # 1. Провери блокирани
+            for email in emails:
+                subject, sender, body, thread_id = get_email_content(service, email['id'])
+
                 if is_automated_email(sender):
                     mark_as_read(service, email['id'])
+                    save_to_log(user_email, sender, subject, '', 'Автоматски', 'игнориран', 'AUTO')
                     continue
 
-                # 2. Заштита од јамка
                 if not can_reply_to(sender):
                     print(f"⚠️ Rate limit за {sender}")
                     mark_as_read(service, email['id'])
                     continue
 
-                # 3. Категоризација
                 category = categorize_email(subject, sender, body)
-                print(f"📂 Категорија: {category}")
 
-                # 4. Ако бара човечка интервенција
                 if 'URGENT_HUMAN' in category or 'COMPLAINT' in category:
                     email_data = {
                         'id': email['id'],
@@ -229,24 +283,29 @@ def agent_loop(token, user_email):
                         'user_email': user_email,
                         'category': category
                     }
-                    if not any(p['id'] == email['id'] for p in agent_state['pending']):
-                        agent_state['pending'].append(email_data)
+                    if not any(p['id'] == email['id'] for p in state['pending']):
+                        state['pending'].append(email_data)
+                    save_to_log(user_email, sender, subject, '', f'Категорија: {category}', 'чека_човек', category)
                     continue
 
-                # 5. Ако е спам
                 if 'SPAM' in category:
                     mark_as_read(service, email['id'])
+                    save_to_log(user_email, sender, subject, '', 'Автоматски', 'спам', 'SPAM')
                     continue
 
-                # 6. Провери шаблони
+                # Земи историја на конверзацијата
+                with app.app_context():
+                    thread_history = get_thread_history(user_email, thread_id)
+
                 matched = find_matching_template(subject, body, templates)
                 if matched:
                     response_text = matched['response']
                     source = f"Шаблон: {matched['name']}"
                 else:
-                    decision = ai_decide(subject, sender, body)
+                    decision = ai_decide(subject, sender, body, thread_history)
                     if 'ИГНОРИРАЈ' in decision:
                         mark_as_read(service, email['id'])
+                        save_to_log(user_email, sender, subject, '', 'AI', 'игнориран', category)
                         continue
                     response_text = decision.split('ПОРАКА:')[-1].strip()
                     source = "AI генериран"
@@ -259,22 +318,19 @@ def agent_loop(token, user_email):
                     'response': response_text,
                     'source': source,
                     'user_email': user_email,
-                    'category': category
+                    'category': category,
+                    'thread_id': thread_id
                 }
 
-                if agent_state['auto_mode']:
+                if state['auto_mode']:
                     send_reply(service, sender, subject, response_text)
                     mark_as_read(service, email['id'])
-                    agent_state['processed'].append({**email_data, 'status': 'испратено'})
-                    with app.app_context():
-                        log = EmailLog(user_email=user_email, sender=sender, subject=subject,
-                                      response=response_text, source=source, status='испратено',
-                                      category=category)
-                        db.session.add(log)
-                        db.session.commit()
+                    state['processed'].append({**email_data, 'status': 'испратено'})
+                    save_to_log(user_email, sender, subject, response_text, source, 'испратено', category)
+                    save_thread_memory(user_email, thread_id, sender, subject, body, response_text)
                 else:
-                    if not any(p['id'] == email['id'] for p in agent_state['pending']):
-                        agent_state['pending'].append(email_data)
+                    if not any(p['id'] == email['id'] for p in state['pending']):
+                        state['pending'].append(email_data)
 
             time.sleep(60)
         except Exception as e:
@@ -301,7 +357,9 @@ def callback():
 
 @app.route('/logout')
 def logout():
-    agent_state['running'] = False
+    user_email = session.get('user', {}).get('email', '')
+    if user_email in user_states:
+        user_states[user_email]['running'] = False
     session.clear()
     return redirect(url_for('index'))
 
@@ -309,20 +367,23 @@ def logout():
 def start():
     if not session.get('user'):
         return redirect(url_for('login'))
-    auto_mode = request.form.get('mode') == 'auto'
-    agent_state['auto_mode'] = auto_mode
-    agent_state['running'] = True
-    agent_state['pending'] = []
-    agent_state['processed'] = []
-    token = session.get('token')
     user_email = session.get('user', {}).get('email', '')
+    auto_mode = request.form.get('mode') == 'auto'
+    state = get_user_state(user_email)
+    state['auto_mode'] = auto_mode
+    state['running'] = True
+    state['pending'] = []
+    state['processed'] = []
+    token = session.get('token')
     thread = threading.Thread(target=agent_loop, args=(token, user_email), daemon=True)
     thread.start()
     return redirect(url_for('dashboard'))
 
 @app.route('/stop', methods=['POST'])
 def stop():
-    agent_state['running'] = False
+    user_email = session.get('user', {}).get('email', '')
+    state = get_user_state(user_email)
+    state['running'] = False
     return redirect(url_for('index'))
 
 @app.route('/dashboard')
@@ -330,53 +391,41 @@ def dashboard():
     if not session.get('user'):
         return redirect(url_for('login'))
     user_email = session.get('user', {}).get('email', '')
-    logs = EmailLog.query.filter_by(user_email=user_email).order_by(EmailLog.timestamp.desc()).limit(50).all()
-    return render_template('dashboard.html', state=agent_state, user=session.get('user'), logs=logs)
+    state = get_user_state(user_email)
+    return render_template('dashboard.html', state=state, user=session.get('user'))
 
 @app.route('/approve/<email_id>', methods=['POST'])
 def approve(email_id):
+    user_email = session.get('user', {}).get('email', '')
+    state = get_user_state(user_email)
     token = session.get('token')
     service = get_gmail_service_from_token(token)
-    for email in agent_state['pending']:
+    for email in state['pending']:
         if email['id'] == email_id:
             send_reply(service, email['sender'], email['subject'], email['response'])
             mark_as_read(service, email_id)
-            agent_state['pending'].remove(email)
-            agent_state['processed'].append({**email, 'status': 'испратено'})
-            log = EmailLog(
-                user_email=session.get('user', {}).get('email', ''),
-                sender=email['sender'],
-                subject=email['subject'],
-                response=email['response'],
-                source=email['source'],
-                status='испратено',
-                category=email.get('category', '')
-            )
-            db.session.add(log)
-            db.session.commit()
+            state['pending'].remove(email)
+            state['processed'].append({**email, 'status': 'испратено'})
+            save_to_log(user_email, email['sender'], email['subject'],
+                       email['response'], email['source'], 'испратено', email.get('category', ''))
+            save_thread_memory(user_email, email.get('thread_id', ''), email['sender'],
+                             email['subject'], email['body'], email['response'])
             break
     return redirect(url_for('dashboard'))
 
 @app.route('/reject/<email_id>', methods=['POST'])
 def reject(email_id):
+    user_email = session.get('user', {}).get('email', '')
+    state = get_user_state(user_email)
     token = session.get('token')
     service = get_gmail_service_from_token(token)
-    for email in agent_state['pending']:
+    for email in state['pending']:
         if email['id'] == email_id:
             mark_as_read(service, email_id)
-            agent_state['pending'].remove(email)
-            agent_state['processed'].append({**email, 'status': 'одбиено'})
-            log = EmailLog(
-                user_email=session.get('user', {}).get('email', ''),
-                sender=email['sender'],
-                subject=email['subject'],
-                response=email['response'],
-                source=email['source'],
-                status='одбиено',
-                category=email.get('category', '')
-            )
-            db.session.add(log)
-            db.session.commit()
+            state['pending'].remove(email)
+            state['processed'].append({**email, 'status': 'одбиено'})
+            save_to_log(user_email, email['sender'], email['subject'],
+                       email['response'], email['source'], 'одбиено', email.get('category', ''))
             break
     return redirect(url_for('dashboard'))
 
