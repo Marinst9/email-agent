@@ -343,11 +343,10 @@ def agent_loop(token, user_email):
 def index():
     user = session.get('user')
     return render_template('index.html', user=user)
-
 @app.route('/login')
 def login():
     redirect_uri = 'https://web-production-ec2fb.up.railway.app/callback'
-    return google.authorize_redirect(redirect_uri)
+    return google.authorize_redirect(redirect_uri, access_type='offline', prompt='consent')
 
 @app.route('/callback')
 def callback():
