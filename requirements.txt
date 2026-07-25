@@ -10,3 +10,6 @@ requests
 flask-session
 flask-sqlalchemy
 psycopg2-binary
+pypdf2
+sentence-transformers
+chromadb

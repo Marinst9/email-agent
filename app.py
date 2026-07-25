@@ -11,6 +11,7 @@ import anthropic
 from flask_session import Session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from rag import search_documents, add_document, list_documents, delete_document, extract_text_from_pdf
 
 load_dotenv()
 
@@ -23,6 +24,8 @@ app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = '/tmp/flask_sessions'
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///emails.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 db = SQLAlchemy(app)
 Session(app)
 oauth = OAuth(app)
@@ -100,7 +103,6 @@ def can_reply_to(sender_email):
 
 def init_user_defaults(user_email):
     with app.app_context():
-        # Default блокирани
         if not BlockedSender.query.filter_by(user_email=user_email).first():
             defaults = ['noreply', 'no-reply', 'donotreply', 'newsletter',
                        'notifications', 'notification', 'mailer', 'automated', 'bounce', 'railway']
@@ -108,7 +110,6 @@ def init_user_defaults(user_email):
                 db.session.add(BlockedSender(user_email=user_email, word=word))
             db.session.commit()
 
-        # Default шаблони
         if not UserTemplate.query.filter_by(user_email=user_email).first():
             defaults = [
                 {"name": "Консултации", "keywords": "консултации,consultation,meeting,состанок",
@@ -164,17 +165,28 @@ SPAM - нежелена пошта
     )
     return response.content[0].text.strip()
 
-def ai_decide(subject, sender, body, thread_history=None):
+def ai_decide(subject, sender, body, thread_history=None, user_email=None):
     history_text = ""
     if thread_history:
         history_text = "\nПРЕТХОДНИ ПОРАКИ ВО КОНВЕРЗАЦИЈАТА:\n"
         for mem in reversed(thread_history):
             history_text += f"- Примено: {mem.body[:100]}\n- Одговорено: {mem.response[:100]}\n\n"
 
+    # RAG - пребарај во документите
+    rag_context = ""
+    if user_email:
+        query = f"{subject} {body[:200]}"
+        docs = search_documents(user_email, query)
+        if docs:
+            rag_context = "\nРЕЛЕВАНТНИ ИНФОРМАЦИИ ОД ДОКУМЕНТИТЕ:\n"
+            for doc in docs:
+                rag_context += f"- {doc}\n"
+
     response = ai_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
         system="""Ти си AI агент за мејлови. Одговарај на јазикот на мејлот.
+Ако имаш релевантни информации од документите, користи ги за попрецизен одговор.
 ПРАВИЛА:
 - Автоматска нотификација, реклама, newsletter -> АКЦИЈА: ИГНОРИРАЈ
 - Реална личност бара одговор -> АКЦИЈА: ОДГОВОР
@@ -184,7 +196,7 @@ def ai_decide(subject, sender, body, thread_history=None):
 АКЦИЈА: ОДГОВОР или ПРЕПРАЌАЊЕ или ИГНОРИРАЈ
 АКО ПРЕПРАЌАЊЕ ДО: (email или НИКОЈ)
 ПОРАКА: (текст на одговорот)""",
-        messages=[{"role": "user", "content": f"{history_text}Од: {sender}\nНаслов: {subject}\nСодржина: {body}"}]
+        messages=[{"role": "user", "content": f"{rag_context}{history_text}Од: {sender}\nНаслов: {subject}\nСодржина: {body}"}]
     )
     return response.content[0].text
 
@@ -251,26 +263,30 @@ def save_thread_memory(user_email, thread_id, sender, subject, body, response_te
 def agent_loop(token, user_email):
     service = get_gmail_service_from_token(token)
     state = get_user_state(user_email)
+    processed_ids = set()
 
     while state['running']:
         try:
             emails = get_unread_emails(service)
-
             with app.app_context():
                 templates = load_templates_for_user(user_email)
 
             for email in emails:
+                if email['id'] in processed_ids:
+                    continue
+
                 subject, sender, body, thread_id = get_email_content(service, email['id'])
 
                 with app.app_context():
                     if is_automated_email(sender, user_email):
                         mark_as_read(service, email['id'])
+                        processed_ids.add(email['id'])
                         save_to_log(user_email, sender, subject, '', 'Автоматски', 'игнориран', 'AUTO')
                         continue
 
                 if not can_reply_to(sender):
-                    print(f"⚠️ Rate limit за {sender}")
                     mark_as_read(service, email['id'])
+                    processed_ids.add(email['id'])
                     continue
 
                 category = categorize_email(subject, sender, body)
@@ -288,11 +304,13 @@ def agent_loop(token, user_email):
                     }
                     if not any(p['id'] == email['id'] for p in state['pending']):
                         state['pending'].append(email_data)
+                        processed_ids.add(email['id'])
                     save_to_log(user_email, sender, subject, '', f'Категорија: {category}', 'чека_човек', category)
                     continue
 
                 if 'SPAM' in category:
                     mark_as_read(service, email['id'])
+                    processed_ids.add(email['id'])
                     save_to_log(user_email, sender, subject, '', 'Автоматски', 'спам', 'SPAM')
                     continue
 
@@ -304,9 +322,10 @@ def agent_loop(token, user_email):
                     response_text = matched['response']
                     source = f"Шаблон: {matched['name']}"
                 else:
-                    decision = ai_decide(subject, sender, body, thread_history)
+                    decision = ai_decide(subject, sender, body, thread_history, user_email)
                     if 'ИГНОРИРАЈ' in decision:
                         mark_as_read(service, email['id'])
+                        processed_ids.add(email['id'])
                         save_to_log(user_email, sender, subject, '', 'AI', 'игнориран', category)
                         continue
                     response_text = decision.split('ПОРАКА:')[-1].strip()
@@ -327,12 +346,14 @@ def agent_loop(token, user_email):
                 if state['auto_mode']:
                     send_reply(service, sender, subject, response_text)
                     mark_as_read(service, email['id'])
+                    processed_ids.add(email['id'])
                     state['processed'].append({**email_data, 'status': 'испратено'})
                     save_to_log(user_email, sender, subject, response_text, source, 'испратено', category)
                     save_thread_memory(user_email, thread_id, sender, subject, body, response_text)
                 else:
                     if not any(p['id'] == email['id'] for p in state['pending']):
                         state['pending'].append(email_data)
+                        processed_ids.add(email['id'])
 
             time.sleep(60)
         except Exception as e:
@@ -343,6 +364,7 @@ def agent_loop(token, user_email):
 def index():
     user = session.get('user')
     return render_template('index.html', user=user)
+
 @app.route('/login')
 def login():
     redirect_uri = 'https://web-production-ec2fb.up.railway.app/callback'
@@ -488,6 +510,7 @@ def delete_blocked(word):
         db.session.delete(b)
         db.session.commit()
     return redirect(url_for('manage_blocked'))
+
 @app.route('/stats')
 def stats():
     if not session.get('user'):
@@ -507,5 +530,35 @@ def stats():
     return render_template('stats.html', total=total, isprateni=isprateni,
         odbieni=odbieni, ignorirani=ignorirani, ai_gen=ai_gen,
         shablon=shablon, categories=categories)
+
+@app.route('/knowledge', methods=['GET', 'POST'])
+def knowledge():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    user_email = session.get('user', {}).get('email', '')
+    docs = list_documents(user_email)
+    message = None
+    if request.method == 'POST':
+        if 'file' in request.files:
+            file = request.files['file']
+            if file.filename:
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+                file.save(filepath)
+                if file.filename.endswith('.pdf'):
+                    text = extract_text_from_pdf(filepath)
+                else:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        text = f.read()
+                chunks = add_document(user_email, file.filename, text)
+                message = f"✅ Документот '{file.filename}' е додаден ({chunks} парчиња)"
+                docs = list_documents(user_email)
+    return render_template('knowledge.html', docs=docs, message=message)
+
+@app.route('/knowledge/delete/<filename>', methods=['POST'])
+def delete_knowledge(filename):
+    user_email = session.get('user', {}).get('email', '')
+    delete_document(user_email, filename)
+    return redirect(url_for('knowledge'))
+
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <title>База на знаење - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; }
+        .navbar a:hover { background: #2a2a4a; color: #fff; }
+        .container { max-width: 700px; margin: 30px auto; padding: 0 20px; }
+        .form-card { background: #1a1a2e; border: 1px solid #333; border-radius: 16px; padding: 25px; margin-bottom: 25px; }
+        .form-card h2 { margin-bottom: 15px; color: #ddd; }
+        .upload-area { border: 2px dashed #444; border-radius: 12px; padding: 30px; text-align: center; margin-bottom: 15px; }
+        .upload-area input { display: none; }
+        .upload-area label { cursor: pointer; color: #667eea; }
+        .btn-upload { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 10px 25px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; }
+        .message { background: #1e2e1e; border: 1px solid #2d5a2d; border-radius: 8px; padding: 12px; margin-bottom: 15px; color: #90ee90; }
+        .doc-item { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 12px 15px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .doc-item span { color: #ddd; }
+        .btn-delete { background: #e74c3c; color: white; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+        .hint { font-size: 0.8rem; color: #666; margin-top: 8px; }
+        .empty { text-align: center; color: #555; padding: 30px; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent</h1>
+        <a href="/dashboard">← Назад кон Dashboard</a>
+    </div>
+
+    <div class="container">
+        {% if message %}
+        <div class="message">{{ message }}</div>
+        {% endif %}
+
+        <div class="form-card">
+            <h2>📚 Додај документ во базата на знаење</h2>
+            <p style="color:#aaa; margin-bottom:15px; font-size:0.9rem;">
+                Качи PDF или TXT документи — агентот ќе ги користи за попрецизни одговори
+            </p>
+            <form action="/knowledge" method="POST" enctype="multipart/form-data">
+                <div class="upload-area">
+                    <input type="file" name="file" id="file" accept=".pdf,.txt">
+                    <label for="file">📁 Кликни за да избереш фајл</label>
+                    <p id="filename" style="color:#aaa; margin-top:8px; font-size:0.85rem;"></p>
+                </div>
+                <button type="submit" class="btn-upload">⬆️ Качи документ</button>
+            </form>
+            <div class="hint">Поддржани формати: PDF, TXT</div>
+        </div>
+
+        <h2 style="margin-bottom: 15px; color: #ddd;">📋 Документи во базата</h2>
+        {% if docs %}
+            {% for doc in docs %}
+            <div class="doc-item">
+                <span>📄 {{ doc }}</span>
+                <form action="/knowledge/delete/{{ doc }}" method="POST">
+                    <button type="submit" class="btn-delete">🗑 Избриши</button>
+                </form>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty">Сè уште нема документи</div>
+        {% endif %}
+    </div>
+
+    <script>
+        document.getElementById('file').addEventListener('change', function() {
+            document.getElementById('filename').textContent = this.files[0]?.name || '';
+        });
+    </script>
+</body>
+</html>
