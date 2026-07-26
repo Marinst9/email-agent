@@ -9,11 +9,10 @@
         body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
         .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
         .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .navbar-links { display: flex; gap: 15px; align-items: center; }
-        .navbar-links a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; transition: all 0.2s; }
+        .navbar-links { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .navbar-links a { color: #aaa; text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 0.85rem; }
         .navbar-links a:hover { background: #2a2a4a; color: #fff; }
         .btn-stop { background: #e74c3c; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
-        .btn-stop:hover { background: #c0392b; }
         .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
         .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px; }
         .stat-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; text-align: center; }
@@ -28,14 +27,34 @@
         .email-card .sender { font-weight: bold; color: #667eea; margin-bottom: 5px; }
         .email-card .subject { font-size: 0.95rem; margin-bottom: 10px; color: #ddd; }
         .email-card .body-preview { font-size: 0.85rem; color: #888; margin-bottom: 15px; background: #0f0f1a; padding: 10px; border-radius: 8px; }
-        .email-card .source { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
-        .category-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; margin-bottom: 12px; }
-        .cat-inquiry { background: #1a3a5c; color: #5dade2; }
-        .cat-complaint { background: #5c1a1a; color: #e74c3c; }
-        .cat-urgent { background: #5c3a1a; color: #f39c12; }
-        .cat-spam { background: #2a2a2a; color: #aaa; }
+
+        /* Explainable AI секција */
+        .explainable { background: #0d1a2d; border: 1px solid #1a3a5c; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+        .explainable h4 { color: #5dade2; font-size: 0.9rem; margin-bottom: 10px; }
+        .confidence-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .confidence-label { font-size: 0.8rem; color: #aaa; width: 80px; }
+        .bar-bg { flex: 1; background: #1a2a3a; border-radius: 10px; height: 8px; }
+        .bar-fill { height: 8px; border-radius: 10px; background: linear-gradient(90deg, #27ae60, #667eea); }
+        .confidence-value { font-size: 0.85rem; color: #fff; font-weight: bold; width: 45px; }
+        .docs-used { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .doc-badge { background: #1a3a1a; color: #90ee90; padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; border: 1px solid #2d5a2d; }
+        .reasoning-text { font-size: 0.82rem; color: #aaa; font-style: italic; }
+        .meta-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .badge { padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; }
+        .badge-inquiry { background: #1a3a5c; color: #5dade2; }
+        .badge-complaint { background: #5c1a1a; color: #e74c3c; }
+        .badge-urgent { background: #5c3a1a; color: #f39c12; }
+        .badge-spam { background: #2a2a2a; color: #aaa; }
+        .badge-high { background: #5c1a1a; color: #e74c3c; }
+        .badge-medium { background: #3a3a1a; color: #f39c12; }
+        .badge-low { background: #1a3a1a; color: #27ae60; }
+        .badge-positive { background: #1a3a1a; color: #27ae60; }
+        .badge-negative { background: #5c1a1a; color: #e74c3c; }
+        .badge-neutral { background: #2a2a3a; color: #aaa; }
+        .badge-source { background: #2a1a4a; color: #9b59b6; }
+        .review-warning { background: #3a2a0a; border: 1px solid #f39c12; border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 0.85rem; color: #f39c12; }
+
         .response-edit { width: 100%; background: #0d1f0d; color: #90ee90; border: 1px solid #2d5a2d; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 0.9rem; min-height: 100px; resize: vertical; font-family: 'Segoe UI', sans-serif; }
-        .response-edit:focus { outline: none; border-color: #27ae60; }
         .edit-hint { font-size: 0.75rem; color: #666; margin-bottom: 10px; }
         .actions { display: flex; gap: 10px; align-items: center; }
         .btn-approve { background: #27ae60; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
@@ -48,6 +67,11 @@
         .empty { text-align: center; color: #555; padding: 40px; }
         .pulse { display: inline-block; width: 8px; height: 8px; background: #27ae60; border-radius: 50%; margin-right: 8px; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* Feedback копчиња */
+        .feedback-btns { display: flex; gap: 8px; margin-top: 8px; }
+        .btn-feedback { background: transparent; border: 1px solid #444; color: #aaa; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        .btn-feedback:hover { background: #2a2a4a; }
     </style>
 </head>
 <body>
@@ -55,10 +79,10 @@
         <h1>📧 Email AI Agent</h1>
         <div class="navbar-links">
             <a href="/templates">⚙️ Шаблони</a>
-            <a href="/knowledge">📚 База на знаење</a>
             <a href="/history">📋 Историја</a>
             <a href="/blocked">🚫 Блокирани</a>
             <a href="/stats">📊 Статистики</a>
+            <a href="/knowledge">📚 База на знаење</a>
             <form action="/stop" method="POST" style="display:inline">
                 <button type="submit" class="btn-stop">⏹ Стопирај</button>
             </form>
@@ -93,10 +117,58 @@
                 <div class="sender">{{ email.sender }}</div>
                 <div class="subject">{{ email.subject }}</div>
                 <div class="body-preview">{{ email.body }}</div>
-                <div class="source">{{ email.source }}</div>
-                {% if email.category %}
-                <span class="category-badge cat-{{ email.category|lower }}">{{ email.category }}</span>
+
+                <!-- Meta badges -->
+                <div class="meta-badges">
+                    {% if email.category %}
+                    <span class="badge badge-{{ email.category|lower }}">{{ email.category }}</span>
+                    {% endif %}
+                    {% if email.priority %}
+                    <span class="badge badge-{{ email.priority|lower }}">{{ email.priority }}</span>
+                    {% endif %}
+                    {% if email.sentiment %}
+                    <span class="badge badge-{{ email.sentiment|lower }}">{{ email.sentiment }}</span>
+                    {% endif %}
+                    {% if email.source %}
+                    <span class="badge badge-source">{{ email.source }}</span>
+                    {% endif %}
+                </div>
+
+                <!-- Review warning -->
+                {% if email.needs_review %}
+                <div class="review-warning">
+                    ⚠️ {{ email.review_reason }}
+                </div>
                 {% endif %}
+
+                <!-- Explainable AI -->
+                <div class="explainable">
+                    <h4>🧠 Explainable AI</h4>
+                    {% if email.confidence %}
+                    <div class="confidence-bar">
+                        <span class="confidence-label">Confidence:</span>
+                        <div class="bar-bg">
+                            <div class="bar-fill" style="width: {{ (email.confidence * 100)|int }}%"></div>
+                        </div>
+                        <span class="confidence-value">{{ (email.confidence * 100)|int }}%</span>
+                    </div>
+                    {% endif %}
+                    {% if email.docs_used %}
+                    <div style="margin-bottom: 8px;">
+                        <span style="font-size:0.8rem; color:#aaa;">📄 Documents used:</span>
+                        <div class="docs-used">
+                            {% for doc in email.docs_used %}
+                            <span class="doc-badge">{{ doc[:50] }}...</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if email.reasoning %}
+                    <div class="reasoning-text">💡 {{ email.reasoning }}</div>
+                    {% endif %}
+                </div>
+
+                <!-- Едитабилен одговор -->
                 <div class="edit-hint">✏️ Можеш да го измениш одговорот пред да го испратиш:</div>
                 <form action="/approve/{{ email.id }}" method="POST">
                     <textarea name="custom_response" class="response-edit">{{ email.response }}</textarea>
@@ -120,9 +192,14 @@
                     <div>
                         <div style="font-size:0.9rem; color:#ddd;">{{ email.subject }}</div>
                         <div style="font-size:0.8rem; color:#888;">{{ email.sender }}</div>
-                        {% if email.category %}
-                        <div style="font-size:0.75rem; color:#667eea; margin-top:3px;">{{ email.category }}</div>
-                        {% endif %}
+                        <div style="display:flex; gap:6px; margin-top:4px;">
+                            {% if email.category %}
+                            <span class="badge badge-{{ email.category|lower }}" style="font-size:0.7rem;">{{ email.category }}</span>
+                            {% endif %}
+                            {% if email.confidence %}
+                            <span style="font-size:0.75rem; color:#667eea;">{{ (email.confidence * 100)|int }}% confidence</span>
+                            {% endif %}
+                        </div>
                     </div>
                     <div class="{{ 'status-sent' if email.status == 'испратено' else 'status-rejected' }}">
                         {{ '✅ ' if email.status == 'испратено' else '❌ ' }}{{ email.status }}
