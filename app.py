@@ -12,6 +12,7 @@ from flask_session import Session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from rag import search_documents, add_document, list_documents, delete_document, extract_text_from_pdf
+from agents import EmailOrchestrator
 
 load_dotenv()
 
@@ -39,6 +40,11 @@ class EmailLog(db.Model):
     source = db.Column(db.String(50))
     status = db.Column(db.String(20))
     category = db.Column(db.String(50))
+    confidence = db.Column(db.Float)
+    reasoning = db.Column(db.Text)
+    docs_used = db.Column(db.Text)
+    priority = db.Column(db.String(20))
+    sentiment = db.Column(db.String(20))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 class ThreadMemory(db.Model):
@@ -63,6 +69,15 @@ class BlockedSender(db.Model):
     user_email = db.Column(db.String(100))
     word = db.Column(db.String(100))
 
+class AIFeedback(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    email_log_id = db.Column(db.Integer)
+    feedback = db.Column(db.String(10))
+    original_response = db.Column(db.Text)
+    corrected_response = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
 with app.app_context():
     db.create_all()
 
@@ -77,6 +92,7 @@ google = oauth.register(
 )
 
 ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+orchestrator = EmailOrchestrator()
 user_states = {}
 reply_counter = {}
 
@@ -151,55 +167,6 @@ def get_thread_history(user_email, thread_id):
     ).order_by(ThreadMemory.timestamp.desc()).limit(5).all()
     return memories
 
-def categorize_email(subject, sender, body):
-    response = ai_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=100,
-        system="""Категоризирај го мејлот во ЕДНА од категориите:
-INQUIRY - општо прашање
-COMPLAINT - жалба или незадоволство
-URGENT_HUMAN - итно, бара човечка интервенција
-SPAM - нежелена пошта
-Врати САМО категоријата, ништо друго.""",
-        messages=[{"role": "user", "content": f"Од: {sender}\nНаслов: {subject}\nСодржина: {body[:200]}"}]
-    )
-    return response.content[0].text.strip()
-
-def ai_decide(subject, sender, body, thread_history=None, user_email=None):
-    history_text = ""
-    if thread_history:
-        history_text = "\nПРЕТХОДНИ ПОРАКИ ВО КОНВЕРЗАЦИЈАТА:\n"
-        for mem in reversed(thread_history):
-            history_text += f"- Примено: {mem.body[:100]}\n- Одговорено: {mem.response[:100]}\n\n"
-
-    # RAG - пребарај во документите
-    rag_context = ""
-    if user_email:
-        query = f"{subject} {body[:200]}"
-        docs = search_documents(user_email, query)
-        if docs:
-            rag_context = "\nРЕЛЕВАНТНИ ИНФОРМАЦИИ ОД ДОКУМЕНТИТЕ:\n"
-            for doc in docs:
-                rag_context += f"- {doc}\n"
-
-    response = ai_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1000,
-        system="""Ти си AI агент за мејлови. Одговарај на јазикот на мејлот.
-Ако имаш релевантни информации од документите, користи ги за попрецизен одговор.
-ПРАВИЛА:
-- Автоматска нотификација, реклама, newsletter -> АКЦИЈА: ИГНОРИРАЈ
-- Реална личност бара одговор -> АКЦИЈА: ОДГОВОР
-- Треба препраќање -> АКЦИЈА: ПРЕПРАЌАЊЕ
-
-Формат:
-АКЦИЈА: ОДГОВОР или ПРЕПРАЌАЊЕ или ИГНОРИРАЈ
-АКО ПРЕПРАЌАЊЕ ДО: (email или НИКОЈ)
-ПОРАКА: (текст на одговорот)""",
-        messages=[{"role": "user", "content": f"{rag_context}{history_text}Од: {sender}\nНаслов: {subject}\nСодржина: {body}"}]
-    )
-    return response.content[0].text
-
 def get_gmail_service_from_token(token):
     creds = Credentials(
         token=token['access_token'],
@@ -246,12 +213,19 @@ def mark_as_read(service, msg_id):
         body={'removeLabelIds': ['UNREAD']}
     ).execute()
 
-def save_to_log(user_email, sender, subject, response_text, source, status, category):
+def save_to_log(user_email, sender, subject, response_text, source, status, category,
+                confidence=None, reasoning=None, docs_used=None, priority=None, sentiment=None):
     with app.app_context():
-        log = EmailLog(user_email=user_email, sender=sender, subject=subject,
-                      response=response_text, source=source, status=status, category=category)
+        log = EmailLog(
+            user_email=user_email, sender=sender, subject=subject,
+            response=response_text, source=source, status=status, category=category,
+            confidence=confidence, reasoning=reasoning,
+            docs_used=json.dumps(docs_used) if docs_used else None,
+            priority=priority, sentiment=sentiment
+        )
         db.session.add(log)
         db.session.commit()
+        return log.id
 
 def save_thread_memory(user_email, thread_id, sender, subject, body, response_text):
     with app.app_context():
@@ -289,66 +263,73 @@ def agent_loop(token, user_email):
                     processed_ids.add(email['id'])
                     continue
 
-                category = categorize_email(subject, sender, body)
-
-                if 'URGENT_HUMAN' in category or 'COMPLAINT' in category:
-                    email_data = {
-                        'id': email['id'],
-                        'sender': sender,
-                        'subject': subject,
-                        'body': body[:300],
-                        'response': '⚠️ Овој мејл бара човечка интервенција!',
-                        'source': f'Категорија: {category}',
-                        'user_email': user_email,
-                        'category': category
-                    }
-                    if not any(p['id'] == email['id'] for p in state['pending']):
-                        state['pending'].append(email_data)
-                        processed_ids.add(email['id'])
-                    save_to_log(user_email, sender, subject, '', f'Категорија: {category}', 'чека_човек', category)
-                    continue
-
-                if 'SPAM' in category:
-                    mark_as_read(service, email['id'])
-                    processed_ids.add(email['id'])
-                    save_to_log(user_email, sender, subject, '', 'Автоматски', 'спам', 'SPAM')
-                    continue
-
                 with app.app_context():
                     thread_history = get_thread_history(user_email, thread_id)
                     matched = find_matching_template(subject, body, templates)
 
                 if matched:
                     response_text = matched['response']
-                    source = f"Шаблон: {matched['name']}"
+                    email_data = {
+                        'id': email['id'],
+                        'sender': sender,
+                        'subject': subject,
+                        'body': body[:300],
+                        'response': response_text,
+                        'source': f"Шаблон: {matched['name']}",
+                        'user_email': user_email,
+                        'category': 'INQUIRY',
+                        'confidence': 1.0,
+                        'reasoning': f"Шаблонот '{matched['name']}' се совпаѓа со содржината на мејлот.",
+                        'docs_used': [],
+                        'priority': 'MEDIUM',
+                        'sentiment': 'neutral',
+                        'thread_id': thread_id
+                    }
                 else:
-                    decision = ai_decide(subject, sender, body, thread_history, user_email)
-                    if 'ИГНОРИРАЈ' in decision:
+                    # Користи го Orchestrator
+                    result = orchestrator.process(
+                        subject, sender, body, user_email, thread_history
+                    )
+
+                    if result['action'] == 'ИГНОРИРАЈ':
                         mark_as_read(service, email['id'])
                         processed_ids.add(email['id'])
-                        save_to_log(user_email, sender, subject, '', 'AI', 'игнориран', category)
+                        save_to_log(user_email, sender, subject, '', 'AI', 'игнориран',
+                                   result['classification'].get('category', ''))
                         continue
-                    response_text = decision.split('ПОРАКА:')[-1].strip()
-                    source = "AI генериран"
 
-                email_data = {
-                    'id': email['id'],
-                    'sender': sender,
-                    'subject': subject,
-                    'body': body[:300],
-                    'response': response_text,
-                    'source': source,
-                    'user_email': user_email,
-                    'category': category,
-                    'thread_id': thread_id
-                }
+                    response_text = result['draft'].get('response_text', '') if result.get('draft') else ''
+                    classification = result.get('classification', {})
 
-                if state['auto_mode']:
+                    email_data = {
+                        'id': email['id'],
+                        'sender': sender,
+                        'subject': subject,
+                        'body': body[:300],
+                        'response': response_text,
+                        'source': 'Multi-Agent AI',
+                        'user_email': user_email,
+                        'category': classification.get('category', 'INQUIRY'),
+                        'confidence': result.get('confidence', 0.75),
+                        'reasoning': result.get('reasoning', ''),
+                        'docs_used': [d['content'][:100] for d in result.get('retrieved_docs', [])],
+                        'priority': classification.get('priority', 'MEDIUM'),
+                        'sentiment': classification.get('sentiment', 'neutral'),
+                        'thread_id': thread_id,
+                        'needs_review': result.get('review', {}).get('needs_review', False),
+                        'review_reason': result.get('review', {}).get('reason', '')
+                    }
+
+                if state['auto_mode'] and not email_data.get('needs_review', False):
                     send_reply(service, sender, subject, response_text)
                     mark_as_read(service, email['id'])
                     processed_ids.add(email['id'])
                     state['processed'].append({**email_data, 'status': 'испратено'})
-                    save_to_log(user_email, sender, subject, response_text, source, 'испратено', category)
+                    save_to_log(user_email, sender, subject, response_text,
+                               email_data['source'], 'испратено',
+                               email_data['category'], email_data.get('confidence'),
+                               email_data.get('reasoning'), email_data.get('docs_used'),
+                               email_data.get('priority'), email_data.get('sentiment'))
                     save_thread_memory(user_email, thread_id, sender, subject, body, response_text)
                 else:
                     if not any(p['id'] == email['id'] for p in state['pending']):
@@ -434,7 +415,10 @@ def approve(email_id):
             state['pending'].remove(email)
             state['processed'].append({**email, 'status': 'испратено'})
             save_to_log(user_email, email['sender'], email['subject'],
-                       final_response, email['source'], 'испратено', email.get('category', ''))
+                       final_response, email['source'], 'испратено',
+                       email.get('category', ''), email.get('confidence'),
+                       email.get('reasoning'), email.get('docs_used'),
+                       email.get('priority'), email.get('sentiment'))
             save_thread_memory(user_email, email.get('thread_id', ''), email['sender'],
                              email['subject'], email['body'], final_response)
             break
@@ -452,9 +436,30 @@ def reject(email_id):
             state['pending'].remove(email)
             state['processed'].append({**email, 'status': 'одбиено'})
             save_to_log(user_email, email['sender'], email['subject'],
-                       email['response'], email['source'], 'одбиено', email.get('category', ''))
+                       email['response'], email['source'], 'одбиено',
+                       email.get('category', ''), email.get('confidence'),
+                       email.get('reasoning'), email.get('docs_used'),
+                       email.get('priority'), email.get('sentiment'))
             break
     return redirect(url_for('dashboard'))
+
+@app.route('/feedback/<int:log_id>', methods=['POST'])
+def feedback(log_id):
+    user_email = session.get('user', {}).get('email', '')
+    fb = request.form.get('feedback')
+    corrected = request.form.get('corrected_response', '')
+    log = EmailLog.query.get(log_id)
+    if log:
+        new_feedback = AIFeedback(
+            user_email=user_email,
+            email_log_id=log_id,
+            feedback=fb,
+            original_response=log.response,
+            corrected_response=corrected
+        )
+        db.session.add(new_feedback)
+        db.session.commit()
+    return jsonify({'status': 'ok'})
 
 @app.route('/templates', methods=['GET', 'POST'])
 def manage_templates():
@@ -521,15 +526,23 @@ def stats():
     isprateni = len([l for l in logs if l.status == 'испратено'])
     odbieni = len([l for l in logs if l.status == 'одбиено'])
     ignorirani = len([l for l in logs if l.status == 'игнориран'])
-    ai_gen = len([l for l in logs if l.source == 'AI генериран'])
+    ai_gen = len([l for l in logs if l.source == 'Multi-Agent AI'])
     shablon = len([l for l in logs if l.source and 'Шаблон' in l.source])
+    avg_confidence = 0
+    conf_logs = [l for l in logs if l.confidence]
+    if conf_logs:
+        avg_confidence = round(sum(l.confidence for l in conf_logs) / len(conf_logs), 2)
     categories = {}
     for log in logs:
         cat = log.category or 'UNKNOWN'
         categories[cat] = categories.get(cat, 0) + 1
+    feedbacks = AIFeedback.query.filter_by(user_email=user_email).all()
+    positive = len([f for f in feedbacks if f.feedback == 'positive'])
+    negative = len([f for f in feedbacks if f.feedback == 'negative'])
     return render_template('stats.html', total=total, isprateni=isprateni,
         odbieni=odbieni, ignorirani=ignorirani, ai_gen=ai_gen,
-        shablon=shablon, categories=categories)
+        shablon=shablon, categories=categories, avg_confidence=avg_confidence,
+        positive_feedback=positive, negative_feedback=negative)
 
 @app.route('/knowledge', methods=['GET', 'POST'])
 def knowledge():
