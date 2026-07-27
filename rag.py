@@ -1,26 +1,20 @@
 import os
-import chromadb
-from chromadb.utils import embedding_functions
 import PyPDF2
-import json
 
-# ChromaDB клиент
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
-embedding_fn = embedding_functions.DefaultEmbeddingFunction()
-
-def get_collection(user_email):
-    """Земи или создај колекција за корисникот"""
-    safe_name = user_email.replace('@', '_').replace('.', '_')
-    return chroma_client.get_or_create_collection(
-        name=f"docs_{safe_name}",
-        embedding_function=embedding_fn
-    )
+def get_db():
+    from app import db, KnowledgeDocument
+    return db, KnowledgeDocument
 
 def add_document(user_email, filename, text):
-    """Додај документ во базата на знаење"""
-    collection = get_collection(user_email)
+    from app import db, KnowledgeDocument
     
-    # Подели го текстот на чанкови од 500 карактери
+    # Избриши стари chunks од истиот документ
+    KnowledgeDocument.query.filter_by(
+        user_email=user_email, filename=filename
+    ).delete()
+    db.session.commit()
+    
+    # Подели на chunks
     chunks = []
     chunk_size = 500
     overlap = 50
@@ -29,58 +23,52 @@ def add_document(user_email, filename, text):
         if chunk.strip():
             chunks.append(chunk)
     
-    # Додај ги чанковите во ChromaDB
+    # Зачувај во PostgreSQL
     for i, chunk in enumerate(chunks):
-        collection.add(
-            documents=[chunk],
-            ids=[f"{filename}_{i}"],
-            metadatas=[{"filename": filename, "chunk": i}]
+        doc = KnowledgeDocument(
+            user_email=user_email,
+            filename=filename,
+            chunk_index=i,
+            content=chunk
         )
+        db.session.add(doc)
+    db.session.commit()
     
     return len(chunks)
 
 def search_documents(user_email, query, n_results=3):
-    """Пребарај релевантни документи за прашањето"""
-    try:
-        collection = get_collection(user_email)
-        results = collection.query(
-            query_texts=[query],
-            n_results=min(n_results, collection.count())
-        )
-        if results and results['documents']:
-            return results['documents'][0]
-        return []
-    except Exception as e:
-        print(f"RAG грешка: {e}")
-        return []
-
-def delete_document(user_email, filename):
-    """Избриши документ"""
-    try:
-        collection = get_collection(user_email)
-        results = collection.get(where={"filename": filename})
-        if results['ids']:
-            collection.delete(ids=results['ids'])
-        return True
-    except Exception as e:
-        print(f"Грешка при бришење: {e}")
-        return False
+    from app import KnowledgeDocument
+    
+    # Едноставно keyword пребарување
+    query_words = query.lower().split()
+    all_docs = KnowledgeDocument.query.filter_by(user_email=user_email).all()
+    
+    scored = []
+    for doc in all_docs:
+        content_lower = doc.content.lower()
+        score = sum(1 for word in query_words if word in content_lower)
+        if score > 0:
+            scored.append((score, doc.content))
+    
+    # Сортирај по score и врати топ резултати
+    scored.sort(reverse=True)
+    return [content for _, content in scored[:n_results]]
 
 def list_documents(user_email):
-    """Листа на документи за корисникот"""
-    try:
-        collection = get_collection(user_email)
-        results = collection.get()
-        filenames = set()
-        if results['metadatas']:
-            for meta in results['metadatas']:
-                filenames.add(meta['filename'])
-        return list(filenames)
-    except:
-        return []
+    from app import KnowledgeDocument
+    docs = KnowledgeDocument.query.filter_by(user_email=user_email).all()
+    filenames = list(set(d.filename for d in docs))
+    return filenames
+
+def delete_document(user_email, filename):
+    from app import db, KnowledgeDocument
+    KnowledgeDocument.query.filter_by(
+        user_email=user_email, filename=filename
+    ).delete()
+    db.session.commit()
+    return True
 
 def extract_text_from_pdf(file_path):
-    """Извади текст од PDF"""
     text = ""
     with open(file_path, 'rb') as f:
         reader = PyPDF2.PdfReader(f)

@@ -46,6 +46,13 @@ class EmailLog(db.Model):
     priority = db.Column(db.String(20))
     sentiment = db.Column(db.String(20))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    class KnowledgeDocument(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_email = db.Column(db.String(100))
+    filename = db.Column(db.String(200))
+    chunk_index = db.Column(db.Integer)
+    content = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 class ThreadMemory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
