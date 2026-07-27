@@ -81,6 +81,9 @@
             <a href="/templates">⚙️ Шаблони</a>
             <a href="/history">📋 Историја</a>
             <a href="/blocked">🚫 Блокирани</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="/admin">👑 Admin</a>
+            {% endif %}
             <a href="/stats">📊 Статистики</a>
             <a href="/knowledge">📚 База на знаење</a>
             <form action="/stop" method="POST" style="display:inline">

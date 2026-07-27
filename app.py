@@ -54,6 +54,15 @@ class EmailLog(db.Model):
     content = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+ class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(100), unique=True)
+    name = db.Column(db.String(100))
+    role = db.Column(db.String(20), default='employee')  # admin, manager, employee
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_login = db.Column(db.DateTime)
+
 class ThreadMemory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_email = db.Column(db.String(100))
@@ -366,7 +375,36 @@ def callback():
     session['token'] = token
     with app.app_context():
         init_user_defaults(user_info['email'])
+        # Зачувај/ажурирај корисник во база
+        user = User.query.filter_by(email=user_info['email']).first()
+        if not user:
+            # Прв корисник е автоматски Admin
+            count = User.query.count()
+            role = 'admin' if count == 0 else 'employee'
+            user = User(
+                email=user_info['email'],
+                name=user_info.get('name', ''),
+                role=role
+            )
+            db.session.add(user)
+        user.last_login = datetime.utcnow()
+        db.session.commit()
+        session['role'] = user.role
     return redirect(url_for('index'))
+
+from functools import wraps
+
+def require_role(*roles):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if not session.get('user'):
+                return redirect(url_for('login'))
+            if session.get('role') not in roles:
+                return render_template('unauthorized.html'), 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 @app.route('/logout')
 def logout():
@@ -449,6 +487,34 @@ def reject(email_id):
                        email.get('priority'), email.get('sentiment'))
             break
     return redirect(url_for('dashboard'))
+@app.route('/admin')
+@require_role('admin')
+def admin():
+    users = User.query.all()
+    total_logs = EmailLog.query.count()
+    total_docs = KnowledgeDocument.query.count()
+    feedbacks = AIFeedback.query.count()
+    return render_template('admin.html', users=users,
+        total_logs=total_logs, total_docs=total_docs, feedbacks=feedbacks)
+
+@app.route('/admin/role/<int:user_id>', methods=['POST'])
+@require_role('admin')
+def change_role(user_id):
+    user = User.query.get(user_id)
+    if user:
+        new_role = request.form.get('role')
+        user.role = new_role
+        db.session.commit()
+    return redirect(url_for('admin'))
+
+@app.route('/admin/toggle/<int:user_id>', methods=['POST'])
+@require_role('admin')
+def toggle_user(user_id):
+    user = User.query.get(user_id)
+    if user:
+        user.active = not user.active
+        db.session.commit()
+    return redirect(url_for('admin'))
 
 @app.route('/feedback/<int:log_id>', methods=['POST'])
 def feedback(log_id):
