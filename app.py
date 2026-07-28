@@ -46,7 +46,8 @@ class EmailLog(db.Model):
     priority = db.Column(db.String(20))
     sentiment = db.Column(db.String(20))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    class KnowledgeDocument(db.Model):
+
+class KnowledgeDocument(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_email = db.Column(db.String(100))
     filename = db.Column(db.String(200))
@@ -54,7 +55,7 @@ class EmailLog(db.Model):
     content = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
- class User(db.Model):
+class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(100), unique=True)
     name = db.Column(db.String(100))
