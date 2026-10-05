@@ -1,0 +1,31 @@
+# Web
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+jinja2>=3.1
+python-multipart>=0.0.9
+itsdangerous>=2.2
+
+# Config & validation
+pydantic>=2.7,<3
+pydantic-settings>=2.3
+
+# Database
+sqlalchemy[asyncio]>=2.0.30,<2.1
+asyncpg>=0.29
+alembic>=1.13
+
+# Background processing
+celery[redis]>=5.4
+redis>=5.0.1
+
+# Integrations
+authlib>=1.3
+httpx>=0.27
+anthropic>=0.40
+google-auth>=2.29
+google-api-python-client>=2.130
+pypdf>=4.2
+
+# Used only by the standalone CLI script main.py
+google-auth-oauthlib>=1.2
+python-dotenv>=1.0

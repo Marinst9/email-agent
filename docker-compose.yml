@@ -1,0 +1,75 @@
+# Local stack: docker compose up --build
+# Secrets (SECRET_KEY, GOOGLE_*, ANTHROPIC_API_KEY) come from .env; connection settings are set here
+# so they point at the compose services instead of localhost.
+
+x-app: &app
+  build: .
+  image: email-agent:local
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: postgresql://user:password@db:5432/email_agent
+    REDIS_URL: redis://redis:6379/0
+    SESSION_HTTPS_ONLY: "false"
+
+services:
+  migrate:
+    <<: *app
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *app
+    command: celery -A app.worker.celery_app worker -Q emails --loglevel=INFO
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: email_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d email_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:

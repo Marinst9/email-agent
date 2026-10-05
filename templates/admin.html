@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; }
+        .navbar a:hover { background: #2a2a4a; color: #fff; }
+        .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+        .stat-card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; text-align: center; }
+        .stat-card .number { font-size: 2rem; font-weight: bold; color: #667eea; }
+        .stat-card .label { color: #aaa; font-size: 0.85rem; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 12px; overflow: hidden; }
+        th { background: #2a2a4a; padding: 12px 15px; text-align: left; color: #aaa; font-size: 0.9rem; }
+        td { padding: 12px 15px; border-bottom: 1px solid #2a2a3a; font-size: 0.9rem; }
+        tr:last-child td { border-bottom: none; }
+        .role-select { background: #0f0f1a; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 4px 8px; }
+        .btn-save { background: #667eea; color: white; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+        .btn-toggle { border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+        .btn-active { background: #e74c3c; color: white; }
+        .btn-inactive { background: #27ae60; color: white; }
+        .badge-admin { background: #9b59b6; color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+        .badge-manager { background: #e67e22; color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+        .badge-employee { background: #27ae60; color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent — Admin</h1>
+        <a href="/dashboard">← Dashboard</a>
+    </div>
+
+    <div class="container">
+        <h2 style="margin-bottom: 20px; color: #ddd;">⚙️ Admin Portal</h2>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="number">{{ users|length }}</div>
+                <div class="label">Вкупно корисници</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ total_logs }}</div>
+                <div class="label">Вкупно мејлови</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ total_docs }}</div>
+                <div class="label">Документи (chunks)</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ feedbacks }}</div>
+                <div class="label">Feedback записи</div>
+            </div>
+        </div>
+
+        <h3 style="margin-bottom: 15px; color: #ddd;">👥 Корисници</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ime</th>
+                    <th>Email</th>
+                    <th>Улога</th>
+                    <th>Последно логирање</th>
+                    <th>Статус</th>
+                    <th>Акции</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.name }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>
+                        <span class="badge-{{ user.role }}">{{ user.role }}</span>
+                    </td>
+                    <td>{{ user.last_login.strftime('%d.%m.%Y %H:%M') if user.last_login else 'N/A' }}</td>
+                    <td>{{ '✅ Активен' if user.active else '❌ Неактивен' }}</td>
+                    <td style="display: flex; gap: 8px;">
+                        <form action="/admin/role/{{ user.id }}" method="POST" style="display:flex; gap:5px;">
+                            <select name="role" class="role-select">
+                                <option value="admin" {{ 'selected' if user.role == 'admin' }}>Admin</option>
+                                <option value="manager" {{ 'selected' if user.role == 'manager' }}>Manager</option>
+                                <option value="employee" {{ 'selected' if user.role == 'employee' }}>Employee</option>
+                            </select>
+                            <button type="submit" class="btn-save">Зачувај</button>
+                        </form>
+                        <form action="/admin/toggle/{{ user.id }}" method="POST">
+                            <button type="submit" class="btn-toggle {{ 'btn-active' if user.active else 'btn-inactive' }}">
+                                {{ 'Деактивирај' if user.active else 'Активирај' }}
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

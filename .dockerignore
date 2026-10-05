@@ -1,0 +1,21 @@
+# Secrets: provide them at runtime (env_file / platform variables), never bake them into the image
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+
+# Local data and leftovers not used by the app
+instance/
+chroma_db/
+legacy_flask/
+
+# Tooling and caches
+.git/
+.github/
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

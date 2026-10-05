@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+# Single worker on purpose: the inbox agents keep their state in process memory.
+startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'"
+healthcheckPath = "/healthz"

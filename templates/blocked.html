@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="mk">
+<head>
+    <meta charset="UTF-8">
+    <title>Блокирани - Email AI Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .navbar { background: #1a1a2e; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .navbar h1 { font-size: 1.3rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .navbar a { color: #aaa; text-decoration: none; padding: 8px 15px; border-radius: 8px; }
+        .navbar a:hover { background: #2a2a4a; color: #fff; }
+        .container { max-width: 700px; margin: 30px auto; padding: 0 20px; }
+        .form-card { background: #1a1a2e; border: 1px solid #333; border-radius: 16px; padding: 25px; margin-bottom: 25px; }
+        .form-card h2 { margin-bottom: 15px; color: #ddd; }
+        .form-group { display: flex; gap: 10px; }
+        .form-group input { flex: 1; background: #0f0f1a; border: 1px solid #333; border-radius: 8px; padding: 10px 15px; color: #fff; font-size: 0.95rem; }
+        .form-group input:focus { outline: none; border-color: #667eea; }
+        .btn-add { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; }
+        .hint { font-size: 0.8rem; color: #666; margin-top: 8px; }
+        .blocked-list { display: flex; flex-wrap: wrap; gap: 10px; }
+        .blocked-item { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 8px 15px; display: flex; align-items: center; gap: 10px; }
+        .blocked-item span { color: #ddd; font-size: 0.9rem; }
+        .btn-delete { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📧 Email AI Agent</h1>
+        <a href="/dashboard">← Назад кон Dashboard</a>
+    </div>
+
+    <div class="container">
+        <div class="form-card">
+            <h2>🚫 Додај блокиран испраќач</h2>
+            <form action="/blocked" method="POST">
+                <div class="form-group">
+                    <input type="text" name="word" placeholder="пр. amazon, booking, facebook..." required>
+                    <button type="submit" class="btn-add">Додај</button>
+                </div>
+            </form>
+            <div class="hint">Внеси дел од email адресата или домен — агентот ќе ги игнорира сите мејлови кои го содржат тој збор</div>
+        </div>
+
+        <h2 style="margin-bottom: 15px; color: #ddd;">Блокирани испраќачи</h2>
+        <div class="blocked-list">
+            {% for word in blocked %}
+            <div class="blocked-item">
+                <span>{{ word }}</span>
+                <form action="/blocked/delete/{{ word }}" method="POST">
+                    <button type="submit" class="btn-delete">✕</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
