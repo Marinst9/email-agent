@@ -21,6 +21,8 @@ from app.schemas.email import GmailMessage
 
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 FORWARD_SEPARATOR = "---------- Forwarded message ---------"
+# "Re:", "RE:", "Re[2]:", "Re :" and the Macedonian "Одг:" all mean the subject is already a reply.
+_REPLY_PREFIX = re.compile(r"^\s*(re|одг)\s*(\[\d+\])?\s*:", re.IGNORECASE)
 _FORWARD_PREFIX = re.compile(r"^\s*(fwd?|пр)\s*:", re.IGNORECASE)
 _CHARSET = re.compile(r"charset\s*=\s*\"?([\w.:-]+)\"?", re.IGNORECASE)
 _BLANK_LINES = re.compile(r"\n{3,}")
@@ -57,17 +59,25 @@ class GmailClient:
         return GmailMessage(
             id=message_id,
             thread_id=msg.get("threadId", ""),
-            subject=next((h["value"] for h in headers if h["name"] == "Subject"), "No Subject"),
-            sender=next((h["value"] for h in headers if h["name"] == "From"), ""),
+            subject=_header(headers, "Subject") or "No Subject",
+            sender=_header(headers, "From"),
             body=_extract_plain_text(payload),
+            message_id_header=_header(headers, "Message-ID"),
+            references=_header(headers, "References"),
         )
 
-    async def send_reply(self, to: str, subject: str, text: str) -> None:
+    async def send_reply(
+        self, to: str, subject: str, text: str, *, thread_id: str = "", in_reply_to: str = "", references: str = ""
+    ) -> None:
+        """Reply in the original thread: Gmail needs `threadId` plus matching In-Reply-To/References headers."""
         message = EmailMessage()
         message["To"] = to
-        message["Subject"] = f"Re: {subject}"
+        message["Subject"] = reply_subject(subject)
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+            message["References"] = " ".join(filter(None, [references.strip(), in_reply_to]))
         message.set_content(text)
-        await self._send(message)
+        await self._send(message, thread_id=thread_id)
 
     async def forward(self, to: str, original: GmailMessage, note: str) -> None:
         """Forward `original` to `to`, with `note` above the quoted original message."""
@@ -112,6 +122,15 @@ class GmailClient:
             userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
         )
         await asyncio.to_thread(request.execute)
+
+
+def _header(headers: list[dict[str, str]], name: str) -> str:
+    # Header names are case-insensitive ("Message-ID" vs "Message-Id" depends on the sender).
+    return next((h["value"] for h in headers if h["name"].lower() == name.lower()), "")
+
+
+def reply_subject(subject: str) -> str:
+    return subject if _REPLY_PREFIX.match(subject) else f"Re: {subject}"
 
 
 def forward_subject(subject: str) -> str:

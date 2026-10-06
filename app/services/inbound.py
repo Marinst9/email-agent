@@ -37,6 +37,8 @@ class InboundEmailService:
                 sender=message.sender,
                 subject=message.subject,
                 body=message.body,
+                message_id_header=message.message_id_header,
+                references=message.references,
                 auto_send=auto_send,
                 status=InboundStatus.QUEUED.value,
             )

@@ -224,6 +224,8 @@ def make_row(**overrides: Any) -> InboundEmail:
         "sender": "Ana <ana@klient.mk>",
         "subject": "Прашање за понуда",
         "body": "Здраво, ве молам испратете ми понуда.",
+        "message_id_header": "<CAB123@mail.gmail.com>",
+        "references": "<first@klient.mk>",
         "auto_send": True,
         "status": InboundStatus.QUEUED.value,
         "needs_review": False,

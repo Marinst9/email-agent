@@ -108,7 +108,14 @@ class EmailDeliveryService:
             )
             await gmail.forward(row.forward_to, original, response_text)
         else:
-            await gmail.send_reply(row.sender, row.subject, response_text)
+            await gmail.send_reply(
+                row.sender,
+                row.subject,
+                response_text,
+                thread_id=row.thread_id,
+                in_reply_to=row.message_id_header,
+                references=row.references,
+            )
         try:
             row.response = response_text
             await self._session.commit()
