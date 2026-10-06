@@ -1,0 +1,11 @@
+# Railway config for the Celery worker service.
+# In the worker service: Settings -> Config-as-code -> Railway Config File = /railway.worker.toml
+# (the web service keeps using railway.toml). See README "Deploying on Railway".
+[build]
+builder = "nixpacks"
+
+[deploy]
+# No migrations here: the web service runs `alembic upgrade head` on deploy.
+startCommand = "celery -A app.worker.celery_app worker --loglevel=INFO -Q emails --concurrency=4"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

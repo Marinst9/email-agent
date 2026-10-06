@@ -67,6 +67,45 @@ A production-grade, multi-agent AI email processing and response system built wi
 
 ---
 
+## ⚙️ Running the Worker
+
+Incoming emails are only ingested by the web app; classification, drafting and sending happen in the
+Celery worker. **Without a running worker, emails stay queued and nothing is ever answered.**
+
+Locally (with Redis and PostgreSQL running and `.env` filled in):
+
+    uvicorn app.main:app --reload                                          # web
+    celery -A app.worker.celery_app worker --loglevel=INFO -Q emails       # worker
+
+`docker-compose up` starts both (`web` and `worker` services).
+
+---
+
+## 🚂 Deploying on Railway
+
+The project needs four Railway services in one project:
+
+| Service    | Source                     | Config file                                             |
+| ---------- | -------------------------- | ------------------------------------------------------- |
+| `web`      | this repo                  | `railway.toml` (default; runs migrations, then uvicorn) |
+| `worker`   | this repo                  | `railway.worker.toml` (Celery worker, no public port)   |
+| PostgreSQL | Railway PostgreSQL         |                                                         |
+| Redis      | Railway Redis              |                                                         |
+
+To add the worker:
+
+1. In the project, **New → GitHub Repo** and pick this repository again; name the service `worker`.
+2. In the worker's **Settings → Config-as-code**, set **Railway Config File** to `/railway.worker.toml`.
+3. Give the worker the same variables as `web`: `DATABASE_URL` and `REDIS_URL` (as references to the
+   PostgreSQL and Redis services), `SECRET_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `ANTHROPIC_API_KEY` (and `ANTHROPIC_MODEL` if you override it). Shared variables make this easier.
+4. Do not generate a public domain for the worker; it only talks to Redis and PostgreSQL.
+
+Keep the `web` service at one replica: the inbox pollers keep their running state in process memory.
+The worker can be scaled with replicas or by changing `--concurrency` in `railway.worker.toml`.
+
+---
+
 ## 🧪 Running Tests
 
 To run unit and integration test suites locally:
