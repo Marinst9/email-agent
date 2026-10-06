@@ -26,6 +26,7 @@ _FORWARD_PREFIX = re.compile(r"^\s*(fwd?|пр)\s*:", re.IGNORECASE)
 class GmailClient:
     def __init__(self, service: Any) -> None:
         self._service = service
+        self._label_ids: dict[str, str] = {}
 
     @classmethod
     async def from_token(cls, token: Mapping[str, Any], settings: Settings) -> "GmailClient":
@@ -82,6 +83,26 @@ class GmailClient:
             body["threadId"] = thread_id
         request = self._service.users().messages().send(userId="me", body=body)
         await asyncio.to_thread(request.execute)
+
+    async def add_label(self, message_id: str, label_name: str, *, mark_read: bool) -> None:
+        """Apply a user label (created on first use); also remove UNREAD only when `mark_read`."""
+        body: dict[str, list[str]] = {"addLabelIds": [await self._label_id(label_name)]}
+        if mark_read:
+            body["removeLabelIds"] = ["UNREAD"]
+        request = self._service.users().messages().modify(userId="me", id=message_id, body=body)
+        await asyncio.to_thread(request.execute)
+
+    async def _label_id(self, name: str) -> str:
+        if name not in self._label_ids:
+            listing: dict[str, Any] = await asyncio.to_thread(self._service.users().labels().list(userId="me").execute)
+            existing = next((label["id"] for label in listing.get("labels", []) if label["name"] == name), None)
+            if existing is None:
+                body = {"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
+                request = self._service.users().labels().create(userId="me", body=body)
+                created: dict[str, Any] = await asyncio.to_thread(request.execute)
+                existing = created["id"]
+            self._label_ids[name] = str(existing)
+        return self._label_ids[name]
 
     async def mark_as_read(self, message_id: str) -> None:
         request = self._service.users().messages().modify(

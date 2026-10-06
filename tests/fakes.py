@@ -257,7 +257,9 @@ class PipelineHarness:
         self.inbound = FakeInbound(row)
         self.log = FakeLog()
         self.ai_client, self.ai = fake_anthropic(classification or Classification(priority="LOW"), draft_text)
-        settings = cast(Settings, SimpleNamespace(anthropic_model="claude-sonnet-4-6"))
+        settings = cast(
+            Settings, SimpleNamespace(anthropic_model="claude-sonnet-4-6", gmail_ignored_label="AI-Ignored")
+        )
 
         async def no_stage(stage: object) -> None:
             return None
