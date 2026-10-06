@@ -48,11 +48,19 @@ class EmailDeliveryService:
         custom_response: str | None,
         forward_to: str | None = None,
     ) -> bool:
-        """Send the reviewed draft. Returns False if it was already handled, or is a forward without recipient."""
+        """Send the reviewed draft.
+
+        Returns False if it was already handled, is a forward without recipient, or answers an email the AI
+        proposed to ignore without a written reply.
+        """
         current = await self._inbound.get_for_user(email_id, user_email)
         if current is None:
             return False
         if current.action == DraftAction.FORWARD.value and not (forward_to or current.forward_to):
+            return False
+        # The AI proposed ignoring this email: approving means the reviewer wrote a reply, never an empty one.
+        answering_ignored = current.action == DraftAction.IGNORE.value
+        if answering_ignored and not (custom_response or "").strip():
             return False
 
         row = await self._inbound.claim(
@@ -62,6 +70,8 @@ class EmailDeliveryService:
             return False
         if forward_to and row.action == DraftAction.FORWARD.value:
             row.forward_to = forward_to
+        if answering_ignored:
+            row.action = DraftAction.REPLY.value
         try:
             await self._send(gmail, row, custom_response or row.response or "")
         except Exception:

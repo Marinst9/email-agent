@@ -178,7 +178,12 @@
                     <div class="edit-hint">📨 Препраќање до (задолжително):</div>
                     <input type="email" name="forward_to" class="response-edit" style="min-height:auto" value="{{ email.forward_to or '' }}" required>
                     {% endif %}
+                    {% if email.action == 'ИГНОРИРАЈ' %}
+                    <div class="edit-hint">🤖 AI предлага овој мејл да се игнорира. Напиши одговор за да го испратиш, или одбиј.</div>
+                    <textarea name="custom_response" class="response-edit" required>{{ email.response }}</textarea>
+                    {% else %}
                     <textarea name="custom_response" class="response-edit">{{ email.response }}</textarea>
+                    {% endif %}
                     <div class="actions">
                         <button type="submit" class="btn-approve">{{ '📨 Одобри и препрати' if email.action == 'ПРЕПРАЌАЊЕ' else '✅ Одобри и испрати' }}</button>
                     </div>
