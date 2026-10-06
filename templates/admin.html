@@ -80,6 +80,9 @@
                     <td>{{ user.last_login.strftime('%d.%m.%Y %H:%M') if user.last_login else 'N/A' }}</td>
                     <td>{{ '✅ Активен' if user.active else '❌ Неактивен' }}</td>
                     <td style="display: flex; gap: 8px;">
+                        {% if user.id == current_user_id %}
+                        <span style="color:#aaa; font-size:0.85rem;">(вие)</span>
+                        {% else %}
                         <form action="/admin/role/{{ user.id }}" method="POST" style="display:flex; gap:5px;">
                             <select name="role" class="role-select">
                                 <option value="admin" {{ 'selected' if user.role == 'admin' }}>Admin</option>
@@ -93,6 +96,7 @@
                                 {{ 'Деактивирај' if user.active else 'Активирај' }}
                             </button>
                         </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
