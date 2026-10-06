@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import TextBlock
 from pydantic import ValidationError
 
+from app.core.telemetry import log_usage
 from app.schemas.agent import (
     Classification,
     DraftAction,
@@ -17,6 +18,7 @@ from app.schemas.agent import (
     RetrievedDoc,
     ReviewDecision,
 )
+from app.schemas.common import normalize_email_address
 from app.schemas.email import GmailMessage, ThreadTurn
 from app.schemas.tasks import TaskStage
 
@@ -44,6 +46,7 @@ DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одго
 ПОРАКА: (текст на одговорот)"""
 
 MESSAGE_MARKER = "ПОРАКА:"
+FORWARD_TO_MARKER = "ПРЕПРАЌАЊЕ ДО:"
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
@@ -62,6 +65,10 @@ def _first_text(content: Sequence[object]) -> str:
     return next((block.text for block in content if isinstance(block, TextBlock)), "")
 
 
+def _email_prompt(email: GmailMessage, body_chars: int | None = None) -> str:
+    return f"Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body[:body_chars]}"
+
+
 def parse_classification(raw: str) -> Classification:
     try:
         return Classification.model_validate_json(_JSON_FENCE.sub("", raw.strip()))
@@ -76,6 +83,14 @@ def parse_draft_action(text: str) -> DraftAction:
     if "АКЦИЈА: ПРЕПРАЌАЊЕ" in text:
         return DraftAction.FORWARD
     return DraftAction.IGNORE
+
+
+def parse_forward_to(text: str) -> str | None:
+    """Recipient from the "АКО ПРЕПРАЌАЊЕ ДО:" line; None when missing or "НИКОЈ"."""
+    for line in text.splitlines():
+        if FORWARD_TO_MARKER in line:
+            return normalize_email_address(line.split(FORWARD_TO_MARKER, 1)[1])
+    return None
 
 
 def draft_confidence(retrieved_docs: Sequence[RetrievedDoc], has_history: bool) -> float:
@@ -93,10 +108,9 @@ class ClassificationAgent:
             model=self._model,
             max_tokens=150,
             system=CLASSIFICATION_PROMPT,
-            messages=[
-                {"role": "user", "content": f"Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body[:300]}"}
-            ],
+            messages=[{"role": "user", "content": _email_prompt(email, body_chars=300)}],
         )
+        log_usage("classify", response)
         return parse_classification(_first_text(response.content))
 
 
@@ -106,9 +120,7 @@ class RetrievalAgent:
 
     async def execute(self, user_email: str, query: str) -> list[RetrievedDoc]:
         docs = await self._searcher.search(user_email, query, limit=3)
-        return [
-            RetrievedDoc(content=doc, index=i, similarity=round(0.95 - i * 0.08, 2)) for i, doc in enumerate(docs)
-        ]
+        return [RetrievedDoc(content=doc, index=i, similarity=round(0.95 - i * 0.08, 2)) for i, doc in enumerate(docs)]
 
 
 class DraftAgent:
@@ -142,15 +154,17 @@ class DraftAgent:
             messages=[
                 {
                     "role": "user",
-                    "content": f"{rag_context}{history_text}Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body}",
+                    "content": f"{rag_context}{history_text}{_email_prompt(email)}",
                 }
             ],
         )
+        log_usage("draft", response)
         text = _first_text(response.content)
+        action = parse_draft_action(text)
 
         return DraftResult(
             raw=text,
-            action=parse_draft_action(text),
+            action=action,
             response_text=text.split(MESSAGE_MARKER)[-1].strip() if MESSAGE_MARKER in text else "",
             confidence=draft_confidence(retrieved_docs, bool(thread_history)),
             docs_used=[d.content[:100] for d in retrieved_docs],
@@ -158,6 +172,7 @@ class DraftAgent:
                 f"Одговорот е генериран врз основа на {len(retrieved_docs)} документи "
                 f"и категоријата {classification.category}."
             ),
+            forward_to=parse_forward_to(text) if action is DraftAction.FORWARD else None,
         )
 
 
@@ -166,7 +181,12 @@ class ReviewAgent:
 
     def execute(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
         reason = ""
-        if classification.category in ("COMPLAINT", "URGENT_HUMAN"):
+        if draft.action is DraftAction.FORWARD:
+            # Forwarding sends the email to a third party: never without a human.
+            reason = "Препраќањето секогаш бара човечка потврда"
+            if draft.forward_to is None:
+                reason += " (не е наведен примач)"
+        elif classification.category in ("COMPLAINT", "URGENT_HUMAN"):
             reason = f"Категорија: {classification.category} бара човечка интервенција"
         elif classification.priority == "HIGH":
             reason = "Висок приоритет — препорачана човечка проверка"
@@ -183,18 +203,27 @@ class EmailOrchestrator:
         self._drafter = DraftAgent(client, model)
         self._reviewer = ReviewAgent()
 
+    async def classify(self, email: GmailMessage, on_stage: StageCallback = _no_progress) -> Classification:
+        await on_stage(TaskStage.CLASSIFYING)
+        classification = await self._classifier.execute(email)
+        logger.debug("Classification: %s", classification)
+        return classification
+
+    def review(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
+        return self._reviewer.execute(draft, classification)
+
     async def process(
         self,
         email: GmailMessage,
         user_email: str,
         thread_history: Sequence[ThreadTurn],
         on_stage: StageCallback = _no_progress,
+        classification: Classification | None = None,
     ) -> OrchestrationResult:
+        """Classify (unless `classification` is given), retrieve, draft and review one email."""
         logger.info("Orchestrator: processing email from %s", email.sender)
-
-        await on_stage(TaskStage.CLASSIFYING)
-        classification = await self._classifier.execute(email)
-        logger.debug("Classification: %s", classification)
+        if classification is None:
+            classification = await self.classify(email, on_stage)
 
         if classification.category == "SPAM":
             return OrchestrationResult(
@@ -215,7 +244,9 @@ class EmailOrchestrator:
         review = self._reviewer.execute(draft, classification)
         logger.info(
             "Orchestrator: action=%s confidence=%s needs_review=%s",
-            draft.action, draft.confidence, review.needs_review,
+            draft.action,
+            draft.confidence,
+            review.needs_review,
         )
 
         return OrchestrationResult(

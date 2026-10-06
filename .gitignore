@@ -1,4 +1,4 @@
-﻿.env
+.env
 credentials.json
 token.json
 templates_data.json
@@ -7,3 +7,10 @@ __pycache__/
 .venv/
 .env.*
 !.env.example
+
+# Removed legacy app and its local data stores; never commit them again
+legacy_flask/
+instance/
+chroma_db/
+*.db
+*.sqlite3

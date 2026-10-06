@@ -174,9 +174,13 @@
                 <!-- Едитабилен одговор -->
                 <div class="edit-hint">✏️ Можеш да го измениш одговорот пред да го испратиш:</div>
                 <form action="/approve/{{ email.id }}" method="POST">
+                    {% if email.action == 'ПРЕПРАЌАЊЕ' %}
+                    <div class="edit-hint">📨 Препраќање до (задолжително):</div>
+                    <input type="email" name="forward_to" class="response-edit" style="min-height:auto" value="{{ email.forward_to or '' }}" required>
+                    {% endif %}
                     <textarea name="custom_response" class="response-edit">{{ email.response }}</textarea>
                     <div class="actions">
-                        <button type="submit" class="btn-approve">✅ Одобри и испрати</button>
+                        <button type="submit" class="btn-approve">{{ '📨 Одобри и препрати' if email.action == 'ПРЕПРАЌАЊЕ' else '✅ Одобри и испрати' }}</button>
                     </div>
                 </form>
                 <form action="/reject/{{ email.id }}" method="POST" style="margin-top: 8px;">

@@ -6,16 +6,19 @@ requires-python = ">=3.11"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["legacy_flask"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# The standalone CLI asks for confirmation with input() inside its single-task async loop, on purpose.
+"main.py" = ["ASYNC250"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
-exclude = ["legacy_flask/", "main.py"]
+exclude = ["main.py"]
 
 [[tool.mypy.overrides]]
 module = ["googleapiclient.*", "google.oauth2.*", "authlib.*"]

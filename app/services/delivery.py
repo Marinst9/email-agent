@@ -1,12 +1,15 @@
-"""Sending (or discarding) drafted replies. Used by the worker (auto mode) and the review dashboard."""
+"""Sending (or discarding) drafted replies and forwards. Used by the worker (auto mode) and the review dashboard.
+
+Forwards are only ever sent from `approve`: `auto_send` refuses them, so a forward always has a human sign-off.
+"""
 
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import InboundEmail
-from app.models.enums import EmailStatus, InboundStatus
-from app.schemas.email import EmailLogCreate
+from app.models.enums import DraftAction, EmailStatus, InboundStatus
+from app.schemas.email import EmailLogCreate, GmailMessage
 from app.services.email_log import EmailLogService
 from app.services.gmail import GmailClient
 from app.services.inbound import InboundEmailService
@@ -37,12 +40,28 @@ class EmailDeliveryService:
         self._inbound = InboundEmailService(session)
         self._log = EmailLogService(session)
 
-    async def approve(self, gmail: GmailClient, user_email: str, email_id: str, custom_response: str | None) -> bool:
+    async def approve(
+        self,
+        gmail: GmailClient,
+        user_email: str,
+        email_id: str,
+        custom_response: str | None,
+        forward_to: str | None = None,
+    ) -> bool:
+        """Send the reviewed draft. Returns False if it was already handled, or is a forward without recipient."""
+        current = await self._inbound.get_for_user(email_id, user_email)
+        if current is None:
+            return False
+        if current.action == DraftAction.FORWARD.value and not (forward_to or current.forward_to):
+            return False
+
         row = await self._inbound.claim(
             email_id, expected=InboundStatus.AWAITING_REVIEW, new=InboundStatus.SENT, user_email=user_email
         )
         if row is None:
             return False
+        if forward_to and row.action == DraftAction.FORWARD.value:
+            row.forward_to = forward_to
         try:
             await self._send(gmail, row, custom_response or row.response or "")
         except Exception:
@@ -62,6 +81,10 @@ class EmailDeliveryService:
 
     async def auto_send(self, gmail: GmailClient, row: InboundEmail) -> InboundStatus:
         """Send a drafted reply without review. On a send failure the draft falls back to human review."""
+        if row.action != DraftAction.REPLY.value:
+            # Defence in depth: the review gate already flags forwards, but never auto-send one.
+            moved = await self._inbound.claim(row.id, expected=InboundStatus.DRAFTED, new=InboundStatus.AWAITING_REVIEW)
+            return InboundStatus.AWAITING_REVIEW if moved is not None else InboundStatus(row.status)
         claimed = await self._inbound.claim(row.id, expected=InboundStatus.DRAFTED, new=InboundStatus.SENT)
         if claimed is None:
             return InboundStatus(row.status)
@@ -76,14 +99,31 @@ class EmailDeliveryService:
     async def _send(self, gmail: GmailClient, row: InboundEmail, response_text: str) -> None:
         # Only a failure of the send itself propagates (and un-claims the email). Once the reply is out,
         # bookkeeping failures must not make the email look unsent and invite a duplicate.
-        await gmail.send_reply(row.sender, row.subject, response_text)
+        is_forward = row.action == DraftAction.FORWARD.value
+        if is_forward:
+            if not row.forward_to:
+                raise ValueError(f"Forward {row.id} has no recipient")
+            original = GmailMessage(
+                id=row.gmail_message_id, thread_id=row.thread_id, sender=row.sender, subject=row.subject, body=row.body
+            )
+            await gmail.forward(row.forward_to, original, response_text)
+        else:
+            await gmail.send_reply(
+                row.sender,
+                row.subject,
+                response_text,
+                thread_id=row.thread_id,
+                in_reply_to=row.message_id_header,
+                references=row.references,
+            )
         try:
             row.response = response_text
             await self._session.commit()
             await gmail.mark_as_read(row.gmail_message_id)
             await self._log.record(to_log_entry(row, EmailStatus.SENT, response_text))
-            await self._log.remember_thread(
-                row.user_email, row.thread_id, row.sender, row.subject, row.body, response_text
-            )
+            if not is_forward:
+                await self._log.remember_thread(
+                    row.user_email, row.thread_id, row.sender, row.subject, row.body, response_text
+                )
         except Exception:
             logger.exception("Reply to %s was sent but post-send bookkeeping failed", row.id)

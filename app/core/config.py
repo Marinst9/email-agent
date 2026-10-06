@@ -50,6 +50,8 @@ class Settings(DatabaseSettings):
     # When unset, the callback URL is derived from the incoming request.
     google_redirect_uri: str | None = None
     gmail_unread_query: str = "is:unread newer_than:1d"
+    # Applied to emails the agent decides not to answer, so they stay findable instead of vanishing.
+    gmail_ignored_label: str = "AI-Ignored"
 
     # Anthropic
     anthropic_api_key: SecretStr
@@ -78,4 +80,4 @@ class Settings(DatabaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]  # values come from the environment
+    return Settings()  # values come from the environment

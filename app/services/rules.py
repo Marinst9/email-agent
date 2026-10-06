@@ -9,32 +9,38 @@ from app.models import BlockedSender, UserTemplate
 from app.schemas.rules import ReplyTemplateCreate, ReplyTemplateRead
 
 DEFAULT_BLOCKED_WORDS: tuple[str, ...] = (
-    "noreply", "no-reply", "donotreply", "newsletter", "notifications",
-    "notification", "mailer", "automated", "bounce", "railway",
+    "noreply",
+    "no-reply",
+    "donotreply",
+    "newsletter",
+    "notifications",
+    "notification",
+    "mailer",
+    "automated",
+    "bounce",
+    "railway",
 )
 
+# Keywords are matched as substrings of subject + body, so keep them specific. Generic words
+# ("help", "request", "urgent") matched far too many emails that needed a real answer.
 DEFAULT_TEMPLATES: tuple[ReplyTemplateCreate, ...] = (
     ReplyTemplateCreate(
         name="Консултации",
         keywords="консултации,consultation,meeting,состанок",
-        response="Здраво, благодарам за пораката. Слободен/на сум за консултации во следните термини: понеделник и среда 10-12ч.",
+        response=(
+            "Здраво, благодарам за пораката. "
+            "Слободен/на сум за консултации во следните термини: понеделник и среда 10-12ч."
+        ),
     ),
     ReplyTemplateCreate(
         name="Потврда за прием",
-        keywords="барање,request,апликација,application",
+        keywords="апликација,application",
         response="Здраво, Ви потврдувам дека Вашето барање е примено. Ќе Ви одговориме во рок од 2 работни дена.",
-    ),
-    ReplyTemplateCreate(
-        name="Недостапност",
-        keywords="итно,urgent,помош,help",
-        response="Здраво, во моментов не сум достапен/на. За итни работи контактирајте нè на друга адреса.",
     ),
 )
 
 
-def find_matching_template(
-    subject: str, body: str, templates: Sequence[ReplyTemplateRead]
-) -> ReplyTemplateRead | None:
+def find_matching_template(subject: str, body: str, templates: Sequence[ReplyTemplateRead]) -> ReplyTemplateRead | None:
     text = f"{subject} {body}".lower()
     for template in templates:
         if any(keyword.lower() in text for keyword in template.keywords):

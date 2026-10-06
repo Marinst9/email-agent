@@ -62,7 +62,9 @@ class KnowledgeService:
         result = await self._session.scalars(
             select(KnowledgeDocument.content).where(KnowledgeDocument.user_email == user_email)
         )
-        scored = [(score, content) for content in result if content and (score := score_chunk(query_words, content)) > 0]
+        scored = [
+            (score, content) for content in result if content and (score := score_chunk(query_words, content)) > 0
+        ]
         scored.sort(key=lambda item: item[0], reverse=True)
         return [content for _, content in scored[:limit]]
 

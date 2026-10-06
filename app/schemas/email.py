@@ -13,6 +13,9 @@ class GmailMessage(BaseModel):
     sender: str
     subject: str
     body: str
+    # RFC 822 headers, needed to thread our reply under this message.
+    message_id_header: str = ""
+    references: str = ""
 
 
 class EmailLogCreate(BaseModel):

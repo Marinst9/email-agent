@@ -1,7 +1,11 @@
 """The email processing pipeline executed by the Celery worker for one ingested email.
 
-QUEUED --filter/rules/LLM--> DRAFTED --deliver--> SENT | AWAITING_REVIEW
-   \\--> IGNORED (automated sender, rate limited, or AI decided to ignore)
+QUEUED --filter/rules/LLM--> DRAFTED --deliver--> SENT | AWAITING_REVIEW (always for forwards, and
+   |                                                   for auto replies over the per-sender rate limit)
+   \\--> IGNORED (blocked sender, spam, or AI decided to ignore)
+
+Ignored emails are never silently dropped: they get the `gmail_ignored_label` label in Gmail and,
+in manual mode, stay unread so the user still sees them.
 
 Re-running is safe: each run resumes from the persisted status, and a transient LLM failure
 leaves the email in QUEUED so the retry starts the drafting step again.
@@ -14,8 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models import InboundEmail
-from app.models.enums import TEMPLATE_SOURCE_PREFIX, EmailSource, EmailStatus, InboundStatus
-from app.schemas.agent import DraftAction
+from app.models.enums import TEMPLATE_SOURCE_PREFIX, DraftAction, EmailSource, EmailStatus, InboundStatus
+from app.schemas.agent import DraftResult
 from app.schemas.email import EmailLogCreate, GmailMessage
 from app.schemas.tasks import TaskStage
 from app.services.ai_agents import EmailOrchestrator, StageCallback
@@ -86,25 +90,43 @@ class EmailPipeline:
         if await self._blocked.is_blocked(row.user_email, row.sender):
             return await self._ignore(row, source=EmailSource.AUTOMATED, category="AUTO", reason="Blocked sender")
 
-        if not await self._rate_limiter.allow(row.user_email, row.sender, row.id):
-            return await self._ignore(row, reason="Reply rate limit reached for this sender", log=False)
+        message = GmailMessage(
+            id=row.gmail_message_id, thread_id=row.thread_id, sender=row.sender, subject=row.subject, body=row.body
+        )
+        # Transient LLM errors propagate from here; nothing has been written yet, so a retry starts clean.
+        # Classification runs before template matching so a template reply to an urgent email or a
+        # complaint goes through the same review rules as an AI draft.
+        classification = await self._orchestrator.classify(message, on_stage=self._on_stage)
 
         templates = await self._templates.list_for_user(row.user_email)
         template = find_matching_template(row.subject, row.body, templates)
-        if template is not None:
+        if template is not None and classification.category != "SPAM":
+            reasoning = f"Шаблонот '{template.name}' се совпаѓа со содржината на мејлот."
+            draft = DraftResult(
+                raw=template.response,
+                action=DraftAction.REPLY,
+                response_text=template.response,
+                confidence=1.0,
+                docs_used=[],
+                reasoning=reasoning,
+            )
+            review = self._orchestrator.review(draft, classification)
             row.response = template.response
+            row.action = DraftAction.REPLY.value
             row.source = f"{TEMPLATE_SOURCE_PREFIX}: {template.name}"
-            row.category, row.priority, row.sentiment = "INQUIRY", "MEDIUM", "neutral"
-            row.confidence = 1.0
-            row.reasoning = f"Шаблонот '{template.name}' се совпаѓа со содржината на мејлот."
+            row.category = classification.category
+            row.priority = classification.priority
+            row.sentiment = classification.sentiment
+            row.confidence = draft.confidence
+            row.reasoning = reasoning
             row.docs_used = []
+            row.needs_review = review.needs_review
+            row.review_reason = review.reason
         else:
             history = await self._log.thread_history(row.user_email, row.thread_id)
-            message = GmailMessage(
-                id=row.gmail_message_id, thread_id=row.thread_id, sender=row.sender, subject=row.subject, body=row.body
+            result = await self._orchestrator.process(
+                message, row.user_email, history, on_stage=self._on_stage, classification=classification
             )
-            # Transient LLM errors propagate from here; nothing has been written yet, so a retry starts clean.
-            result = await self._orchestrator.process(message, row.user_email, history, on_stage=self._on_stage)
 
             if result.action is DraftAction.IGNORE:
                 return await self._ignore(
@@ -112,6 +134,8 @@ class EmailPipeline:
                 )
 
             row.response = result.draft.response_text if result.draft else ""
+            row.action = result.action.value
+            row.forward_to = result.draft.forward_to if result.draft else None
             row.source = EmailSource.MULTI_AGENT.value
             row.category = result.classification.category
             row.priority = result.classification.priority
@@ -126,9 +150,14 @@ class EmailPipeline:
         return InboundStatus.DRAFTED
 
     async def _dispatch(self, row: InboundEmail) -> InboundStatus:
-        if row.auto_send and not row.needs_review:
-            await self._on_stage(TaskStage.DELIVERING)
-            return await self._delivery.auto_send(await self._gmail_for(row.user_email), row)
+        # Only plain replies may go out without a human; forwards always wait for review.
+        if row.auto_send and not row.needs_review and row.action == DraftAction.REPLY.value:
+            # The limiter is idempotent per email id, so a retried dispatch does not use another slot.
+            if await self._rate_limiter.allow(row.user_email, row.sender, row.id):
+                await self._on_stage(TaskStage.DELIVERING)
+                return await self._delivery.auto_send(await self._gmail_for(row.user_email), row)
+            row.needs_review = True
+            row.review_reason = "Достигнат е лимитот на автоматски одговори до овој испраќач"
         await self._inbound.set_status(row, InboundStatus.AWAITING_REVIEW)
         return InboundStatus.AWAITING_REVIEW
 
@@ -139,21 +168,21 @@ class EmailPipeline:
         reason: str,
         source: EmailSource | None = None,
         category: str = "",
-        log: bool = True,
     ) -> InboundStatus:
-        await (await self._gmail_for(row.user_email)).mark_as_read(row.gmail_message_id)
-        if log:
-            await self._log.record(
-                EmailLogCreate(
-                    user_email=row.user_email,
-                    sender=row.sender,
-                    subject=row.subject,
-                    response="",
-                    source=source.value if source else "",
-                    status=EmailStatus.IGNORED,
-                    category=category,
-                )
+        gmail = await self._gmail_for(row.user_email)
+        # In manual mode the user reads their own inbox, so leave the email unread there.
+        await gmail.add_label(row.gmail_message_id, self._settings.gmail_ignored_label, mark_read=row.auto_send)
+        await self._log.record(
+            EmailLogCreate(
+                user_email=row.user_email,
+                sender=row.sender,
+                subject=row.subject,
+                response="",
+                source=source.value if source else "",
+                status=EmailStatus.IGNORED,
+                category=category,
             )
+        )
         row.reasoning = reason
         row.category = category or row.category
         await self._inbound.set_status(row, InboundStatus.IGNORED)

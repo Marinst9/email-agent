@@ -33,7 +33,7 @@ async def _fail(runtime: WorkerRuntime, email_id: str, attempts: int, error: str
 
 
 @celery_app.task(bind=True, name="emails.process_incoming_email")
-def process_incoming_email_task(self: Task, email_id: str) -> str:
+def process_incoming_email_task(self: Task[[str], str], email_id: str) -> str:
     """Filter, classify, retrieve context, draft and (optionally) send the reply for one ingested email.
 
     Retries with exponential backoff on transient LLM API failures (429/503/529, network errors).
@@ -60,7 +60,11 @@ def process_incoming_email_task(self: Task, email_id: str) -> str:
             )
             logger.warning(
                 "Transient failure for %s (attempt %d/%d), retrying in %.1fs: %s",
-                email_id, attempts, settings.llm_max_retries + 1, countdown, describe(exc),
+                email_id,
+                attempts,
+                settings.llm_max_retries + 1,
+                countdown,
+                describe(exc),
             )
             runtime.run(runtime.task_states.mark_retrying(email_id, attempts, describe(exc), countdown))
             raise self.retry(exc=exc, countdown=countdown, max_retries=settings.llm_max_retries) from exc

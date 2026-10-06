@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 from anthropic import AsyncAnthropic
+from anthropic.types import Usage
 
 from app.agents import StructuredOutputError, create_validated, parse_json_output, schema_instructions
 from app.schemas.agent import DraftAction, OrchestrationResult
@@ -15,8 +16,13 @@ VALID = {
     "classification": {"category": "INQUIRY", "priority": "LOW", "language": "mk", "sentiment": "neutral"},
     "retrieved_docs": [],
     "draft": {
-        "raw": "", "action": "ОДГОВОР", "response_text": "Здраво!", "confidence": 0.9,
-        "docs_used": [], "reasoning": "Прашање", "forward_to": None,
+        "raw": "",
+        "action": "ОДГОВОР",
+        "response_text": "Здраво!",
+        "confidence": 0.9,
+        "docs_used": [],
+        "reasoning": "Прашање",
+        "forward_to": None,
     },
     "review": {"needs_review": False, "reason": "", "auto_send": True},
     "confidence": 0.9,
@@ -32,7 +38,12 @@ class FakeMessages:
     async def create(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(list(kwargs["messages"]))
         text, stop_reason = self._outputs[len(self.calls) - 1]
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason=stop_reason)
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=text)],
+            stop_reason=stop_reason,
+            model=kwargs["model"],
+            usage=Usage(input_tokens=10, output_tokens=5),
+        )
 
 
 def _client(*outputs: tuple[str, str]) -> tuple[AsyncAnthropic, FakeMessages]:

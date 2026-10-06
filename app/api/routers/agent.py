@@ -73,7 +73,7 @@ async def approve_email(
     gmail: GmailClientDep,
     delivery: DeliveryServiceDep,
 ) -> RedirectResponse:
-    await delivery.approve(gmail, user.email, email_id, form.custom_response)
+    await delivery.approve(gmail, user.email, email_id, form.custom_response, form.forward_to)
     return redirect_to(request, "dashboard")
 
 

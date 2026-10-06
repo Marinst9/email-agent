@@ -88,10 +88,25 @@ def get_email_content(service: Any, msg_id: str) -> tuple[str, str, str]:
 
 
 def is_automated_email(sender: str) -> bool:
-    automated = ["noreply", "no-reply", "donotreply", "do-not-reply",
-                 "newsletter", "notifications", "notification", "mailer",
-                 "automated", "bounce", "support@courseking", "contact@kariera",
-                 "zara", "pinterest", "binance", "linkedin", "upwork"]
+    automated = [
+        "noreply",
+        "no-reply",
+        "donotreply",
+        "do-not-reply",
+        "newsletter",
+        "notifications",
+        "notification",
+        "mailer",
+        "automated",
+        "bounce",
+        "support@courseking",
+        "contact@kariera",
+        "zara",
+        "pinterest",
+        "binance",
+        "linkedin",
+        "upwork",
+    ]
     sender_lower = sender.lower()
     return any(word in sender_lower for word in automated)
 
@@ -127,10 +142,7 @@ def forward_email(service: Any, to: str, subject: str, body: str) -> None:
 
 
 def mark_as_read(service: Any, msg_id: str) -> None:
-    service.users().messages().modify(
-        userId="me", id=msg_id,
-        body={"removeLabelIds": ["UNREAD"]}
-    ).execute()
+    service.users().messages().modify(userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}).execute()
 
 
 async def run_agent() -> None:
