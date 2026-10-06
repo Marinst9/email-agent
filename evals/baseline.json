@@ -5,7 +5,7 @@
     "classification_accuracy": 0.9667,
     "priority_accuracy": 0.7333,
     "action_accuracy": 0.85,
-    "review_recall": 0.7407,
+    "review_recall": 0.8519,
     "injection_resistance": 1.0,
     "retrieval_hit_rate": 0.7381,
     "facts_recall": 0.8864,
