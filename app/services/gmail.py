@@ -10,6 +10,7 @@ import base64
 import re
 from collections.abc import Mapping
 from email.message import EmailMessage
+from html.parser import HTMLParser
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -21,6 +22,8 @@ from app.schemas.email import GmailMessage
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 FORWARD_SEPARATOR = "---------- Forwarded message ---------"
 _FORWARD_PREFIX = re.compile(r"^\s*(fwd?|пр)\s*:", re.IGNORECASE)
+_CHARSET = re.compile(r"charset\s*=\s*\"?([\w.:-]+)\"?", re.IGNORECASE)
+_BLANK_LINES = re.compile(r"\n{3,}")
 
 
 class GmailClient:
@@ -115,16 +118,74 @@ def forward_subject(subject: str) -> str:
     return subject if _FORWARD_PREFIX.match(subject) else f"Fwd: {subject}"
 
 
-def _decode(data: str) -> str:
-    return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+class _HtmlToText(HTMLParser):
+    _SKIPPED = frozenset({"script", "style", "head", "title"})
+    _BLOCKS = frozenset({"br", "p", "div", "li", "tr", "table", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._skipping = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._SKIPPED:
+            self._skipping += 1
+        elif tag in self._BLOCKS:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIPPED:
+            self._skipping = max(self._skipping - 1, 0)
+        elif tag in self._BLOCKS:
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skipping:
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        lines = [" ".join(line.split()) for line in "".join(self._chunks).splitlines()]
+        return _BLANK_LINES.sub("\n\n", "\n".join(lines)).strip()
+
+
+def html_to_text(html: str) -> str:
+    parser = _HtmlToText()
+    parser.feed(html)
+    parser.close()
+    return parser.text()
+
+
+def _charset(part: Mapping[str, Any]) -> str:
+    content_type = next(
+        (h["value"] for h in part.get("headers", []) if h.get("name", "").lower() == "content-type"), ""
+    )
+    match = _CHARSET.search(content_type)
+    return match.group(1) if match else "utf-8"
+
+
+def _decode(data: str, charset: str = "utf-8") -> str:
+    raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:  # unknown charset name in the header
+        return raw.decode("utf-8", errors="replace")
+
+
+def _collect_text_parts(part: Mapping[str, Any], found: dict[str, str]) -> None:
+    """Depth-first walk of a Gmail payload; keeps the first text/plain and text/html body (not attachments)."""
+    if part.get("filename"):
+        return
+    for child in part.get("parts", []):
+        _collect_text_parts(child, found)
+    mime_type = str(part.get("mimeType", "")).lower()
+    data = part.get("body", {}).get("data")
+    if data and mime_type in ("text/plain", "text/html") and mime_type not in found:
+        found[mime_type] = _decode(data, _charset(part))
 
 
 def _extract_plain_text(payload: Mapping[str, Any]) -> str:
-    body = ""
-    if "parts" in payload:
-        for part in payload["parts"]:
-            if part.get("mimeType") == "text/plain" and "data" in part.get("body", {}):
-                body = _decode(part["body"]["data"])
-    elif "data" in payload.get("body", {}):
-        body = _decode(payload["body"]["data"])
-    return body
+    """The message text: text/plain if present, otherwise text/html converted to text."""
+    found: dict[str, str] = {}
+    _collect_text_parts(payload, found)
+    plain = found.get("text/plain", "").strip()
+    return plain or html_to_text(found.get("text/html", ""))
