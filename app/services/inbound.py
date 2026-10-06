@@ -53,12 +53,18 @@ class InboundEmailService:
         return await self._session.get(InboundEmail, email_id)
 
     async def get_for_user(self, email_id: str, user_email: str) -> InboundEmail | None:
-        return await self._session.scalar(
+        row: InboundEmail | None = await self._session.scalar(
             select(InboundEmail).where(InboundEmail.id == email_id, InboundEmail.user_email == user_email)
         )
+        return row
 
     async def list_by_status(
-        self, user_email: str, statuses: Sequence[InboundStatus], *, newest_first: bool = False, limit: int | None = None
+        self,
+        user_email: str,
+        statuses: Sequence[InboundStatus],
+        *,
+        newest_first: bool = False,
+        limit: int | None = None,
     ) -> list[InboundEmail]:
         order = InboundEmail.updated_at.desc() if newest_first else InboundEmail.created_at.asc()
         stmt = (

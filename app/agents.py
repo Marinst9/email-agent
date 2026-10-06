@@ -92,9 +92,7 @@ async def create_validated(
                 },
             ]
 
-    raise StructuredOutputError(
-        f"No schema-valid output after {max_attempts} attempts: {last_error}"
-    ) from last_error
+    raise StructuredOutputError(f"No schema-valid output after {max_attempts} attempts: {last_error}") from last_error
 
 
 class EmailAgentAnalyzer:

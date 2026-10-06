@@ -65,6 +65,10 @@ def _first_text(content: Sequence[object]) -> str:
     return next((block.text for block in content if isinstance(block, TextBlock)), "")
 
 
+def _email_prompt(email: GmailMessage, body_chars: int | None = None) -> str:
+    return f"Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body[:body_chars]}"
+
+
 def parse_classification(raw: str) -> Classification:
     try:
         return Classification.model_validate_json(_JSON_FENCE.sub("", raw.strip()))
@@ -104,9 +108,7 @@ class ClassificationAgent:
             model=self._model,
             max_tokens=150,
             system=CLASSIFICATION_PROMPT,
-            messages=[
-                {"role": "user", "content": f"Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body[:300]}"}
-            ],
+            messages=[{"role": "user", "content": _email_prompt(email, body_chars=300)}],
         )
         log_usage("classify", response)
         return parse_classification(_first_text(response.content))
@@ -118,9 +120,7 @@ class RetrievalAgent:
 
     async def execute(self, user_email: str, query: str) -> list[RetrievedDoc]:
         docs = await self._searcher.search(user_email, query, limit=3)
-        return [
-            RetrievedDoc(content=doc, index=i, similarity=round(0.95 - i * 0.08, 2)) for i, doc in enumerate(docs)
-        ]
+        return [RetrievedDoc(content=doc, index=i, similarity=round(0.95 - i * 0.08, 2)) for i, doc in enumerate(docs)]
 
 
 class DraftAgent:
@@ -154,7 +154,7 @@ class DraftAgent:
             messages=[
                 {
                     "role": "user",
-                    "content": f"{rag_context}{history_text}Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body}",
+                    "content": f"{rag_context}{history_text}{_email_prompt(email)}",
                 }
             ],
         )
@@ -244,7 +244,9 @@ class EmailOrchestrator:
         review = self._reviewer.execute(draft, classification)
         logger.info(
             "Orchestrator: action=%s confidence=%s needs_review=%s",
-            draft.action, draft.confidence, review.needs_review,
+            draft.action,
+            draft.confidence,
+            review.needs_review,
         )
 
         return OrchestrationResult(

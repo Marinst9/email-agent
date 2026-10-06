@@ -1,6 +1,6 @@
 """Celery application. Start a worker with:
 
-    celery -A app.worker.celery_app worker --loglevel=INFO -Q emails
+celery -A app.worker.celery_app worker --loglevel=INFO -Q emails
 """
 
 from celery import Celery

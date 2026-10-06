@@ -20,7 +20,7 @@ async def health(
     db_ok = await database.ping()
     redis_ok = False
     with contextlib.suppress(Exception):
-        redis_ok = bool(await redis.ping())  # type: ignore[misc]
+        redis_ok = bool(await redis.ping())
     healthy = db_ok and redis_ok
     if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE

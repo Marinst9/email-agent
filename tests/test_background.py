@@ -103,9 +103,20 @@ async def test_task_state_lifecycle(redis: fakeredis.FakeAsyncRedis) -> None:
 def _row(status: InboundStatus, response: str | None = None) -> InboundEmail:
     now = datetime.now(UTC).replace(tzinfo=None)
     return InboundEmail(
-        id="e1", user_email="me@x", gmail_message_id="g1", thread_id="t", sender="a@b", subject="s", body="b",
-        auto_send=False, status=status.value, response=response, needs_review=False, docs_used=None,
-        created_at=now, updated_at=now,
+        id="e1",
+        user_email="me@x",
+        gmail_message_id="g1",
+        thread_id="t",
+        sender="a@b",
+        subject="s",
+        body="b",
+        auto_send=False,
+        status=status.value,
+        response=response,
+        needs_review=False,
+        docs_used=None,
+        created_at=now,
+        updated_at=now,
     )
 
 

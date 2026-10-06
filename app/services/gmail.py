@@ -35,7 +35,7 @@ class GmailClient:
 
     @classmethod
     async def from_token(cls, token: Mapping[str, Any], settings: Settings) -> "GmailClient":
-        creds = Credentials(
+        creds = Credentials(  # type: ignore[no-untyped-call]  # google-auth's constructor is unannotated
             token=token["access_token"],
             refresh_token=token.get("refresh_token"),
             token_uri=GOOGLE_TOKEN_URI,
@@ -118,8 +118,8 @@ class GmailClient:
         return self._label_ids[name]
 
     async def mark_as_read(self, message_id: str) -> None:
-        request = self._service.users().messages().modify(
-            userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
+        request = (
+            self._service.users().messages().modify(userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]})
         )
         await asyncio.to_thread(request.execute)
 

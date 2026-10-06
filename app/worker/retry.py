@@ -41,19 +41,22 @@ def retry_after_seconds(exc: BaseException) -> float | None:
         return None
 
 
-def backoff_seconds(
-    attempt: int, base: float, cap: float, rand: Callable[[], float] = random.random
-) -> float:
+def backoff_seconds(attempt: int, base: float, cap: float, rand: Callable[[], float] = random.random) -> float:
     """Exponential backoff with "equal jitter": half deterministic, half random.
 
     attempt=0 -> [base/2, base], attempt=1 -> [base, 2*base], ... capped at `cap`.
     """
-    delay = min(cap, base * (2**attempt))
+    delay = min(cap, base * 2.0**attempt)
     return delay / 2 + rand() * delay / 2
 
 
 def retry_countdown(
-    exc: BaseException, attempt: int, base: float, cap: float, hard_cap: float, rand: Callable[[], float] = random.random
+    exc: BaseException,
+    attempt: int,
+    base: float,
+    cap: float,
+    hard_cap: float,
+    rand: Callable[[], float] = random.random,
 ) -> float:
     """Never retry sooner than the server asked; never beyond `hard_cap` (broker visibility constraint)."""
     delay = max(backoff_seconds(attempt, base, cap, rand), retry_after_seconds(exc) or 0.0)

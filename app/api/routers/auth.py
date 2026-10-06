@@ -22,9 +22,7 @@ router = APIRouter(tags=["auth"])
 
 @router.get("/", name="index", response_class=HTMLResponse)
 async def index(request: Request, user: OptionalUserDep) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request, "index.html", {"user": UserRead.model_validate(user) if user else None}
-    )
+    return templates.TemplateResponse(request, "index.html", {"user": UserRead.model_validate(user) if user else None})
 
 
 @router.get("/login", name="login")

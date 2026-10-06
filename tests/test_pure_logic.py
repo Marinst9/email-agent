@@ -92,4 +92,3 @@ def test_review_agent(classification: Classification, confidence: float, needs_r
     decision = ReviewAgent().execute(_draft(confidence), classification)
     assert decision.needs_review is needs_review
     assert decision.auto_send is not needs_review
-

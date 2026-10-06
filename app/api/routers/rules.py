@@ -14,9 +14,7 @@ router = APIRouter(tags=["rules"])
 
 @router.get("/templates", name="manage_templates", response_class=HTMLResponse)
 async def list_templates(request: Request, user: CurrentUserDep, service: TemplateServiceDep) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request, "templates.html", {"templates": await service.list_for_user(user.email)}
-    )
+    return templates.TemplateResponse(request, "templates.html", {"templates": await service.list_for_user(user.email)})
 
 
 @router.post("/templates", name="create_template")

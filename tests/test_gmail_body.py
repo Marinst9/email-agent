@@ -38,7 +38,7 @@ def container(mime_type: str, *parts: dict[str, Any]) -> dict[str, Any]:
 
 HTML = (
     "<html><head><style>p{color:red}</style><title>x</title></head><body>"
-    "<div dir=\"ltr\">Здраво,<br>ве молам за&nbsp;понуда &amp; цени.</div>"
+    '<div dir="ltr">Здраво,<br>ве молам за&nbsp;понуда &amp; цени.</div>'
     "<p>Поздрав,<br>Ана</p><script>alert(1)</script></body></html>"
 )
 
