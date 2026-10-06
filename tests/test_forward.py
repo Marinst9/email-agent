@@ -30,6 +30,20 @@ FORWARD_DRAFT = """АКЦИЈА: ПРЕПРАЌАЊЕ
         ("АКЦИЈА: ПРЕПРАЌАЊЕ\nАКО ПРЕПРАЌАЊЕ ДО: pravno@firma.mk\nПОРАКА: x", "pravno@firma.mk"),
         ("АКЦИЈА: ПРЕПРАЌАЊЕ\nАКО ПРЕПРАЌАЊЕ ДО: НИКОЈ\nПОРАКА: x", None),
         ("АКЦИЈА: ОДГОВОР\nПОРАКА: x", None),
+        # Formats the model produces in practice (found by the evals).
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nДО: finance@lumenprint.mk\n\nПОРАКА:\nx", "finance@lumenprint.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nПРЕПРАЌАЊЕ ДО: hr@firma.mk\nПОРАКА: x", "hr@firma.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nдо: legal@firma.mk\nПОРАКА: x", "legal@firma.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nTO: sales@firma.mk\nПОРАКА: x", "sales@firma.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nForward to: Sales <sales@firma.mk>.\nПОРАКА: x", "sales@firma.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\n**FORWARD TO:** sales@firma.mk\nПОРАКА: x", "sales@firma.mk"),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\n- **ДО**: finance@firma.mk\nПОРАКА: x", "finance@firma.mk"),
+        # Present but not a valid address.
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nДО: сметководство\nПОРАКА: x", None),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nTO: finance@\nПОРАКА: x", None),
+        # A "To:" inside the drafted message is not the recipient; neither are lookalike labels.
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nПОРАКА: Препратено.\nTo: customer@klient.mk", None),
+        ("АКЦИЈА: ПРЕПРАЌАЊЕ\nОД: a@klient.mk\nTOPIC: b@klient.mk\nПОРАКА: x", None),
     ],
 )
 def test_parse_forward_to(text: str, expected: str | None) -> None:

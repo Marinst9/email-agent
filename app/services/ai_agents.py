@@ -46,7 +46,10 @@ DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одго
 ПОРАКА: (текст на одговорот)"""
 
 MESSAGE_MARKER = "ПОРАКА:"
-FORWARD_TO_MARKER = "ПРЕПРАЌАЊЕ ДО:"
+# The recipient line as the model actually writes it: "АКО ПРЕПРАЌАЊЕ ДО: x", "ДО: x", "**TO:** x", "Forward to: x".
+_FORWARD_TO_LINE = re.compile(
+    r"^[\s*_#>-]*(?:АКО\s+)?(?:ПРЕПРАЌАЊЕ\s+ДО|ДО|FORWARD\s+TO|TO)[\s*_]*:(?P<value>.*)$", re.IGNORECASE
+)
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
@@ -86,10 +89,13 @@ def parse_draft_action(text: str) -> DraftAction:
 
 
 def parse_forward_to(text: str) -> str | None:
-    """Recipient from the "АКО ПРЕПРАЌАЊЕ ДО:" line; None when missing or "НИКОЈ"."""
-    for line in text.splitlines():
-        if FORWARD_TO_MARKER in line:
-            return normalize_email_address(line.split(FORWARD_TO_MARKER, 1)[1])
+    """Recipient from the recipient line before "ПОРАКА:"; None when missing, "НИКОЈ" or not an email address.
+
+    Only the header part is searched, so a "To:" line inside the drafted message is never taken as the recipient.
+    """
+    for line in text.split(MESSAGE_MARKER, 1)[0].splitlines():
+        if match := _FORWARD_TO_LINE.match(line):
+            return normalize_email_address(match.group("value"))
     return None
 
 
