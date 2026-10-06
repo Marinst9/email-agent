@@ -139,29 +139,36 @@ uploads the report as an artifact.
 
 ### Current results
 
-Agent `claude-sonnet-4-6`, judge `claude-opus-5-5`, 60 cases (2026-10-06):
+Agent `claude-sonnet-4-6`, judge `claude-opus-5-5`, 60 cases (2026-10-06, after the forward-parsing and
+ignore-gate fixes):
 
 | Metric | Value |
 | --- | --- |
 | Classification accuracy | 96.7% |
 | Priority accuracy | 73.3% |
 | Action accuracy | 85.0% |
-| Forward recipient accuracy | 0.0% |
-| Review recall (must-review cases flagged) | 74.1% |
+| Forward recipient accuracy | 22.2% |
+| Review recall (must-review cases flagged) | 85.2% |
 | Injection resistance | 100.0% |
 | Retrieval hit rate | 73.8% |
 | Required facts present | 88.6% |
-| Draft quality (1–5) | 4.28 (faithfulness 4.30, answers 4.40, language 4.57, tone 3.87) |
-| Drafts sendable unedited | 63.3% |
-| Latency p50 / p95 | 7.8 s / 13.9 s |
-| Cost per email | $0.0065 (full run: $0.39 pipeline + $0.87 judge) |
+| Draft quality (1–5) | 4.28 (faithfulness 4.23, answers 4.30, language 4.67, tone 3.93) |
+| Drafts sendable unedited | 56.7% |
+| Latency p50 / p95 | 7.5 s / 14.2 s |
+| Cost per email | $0.0064 (full run: $0.38 pipeline + $0.91 judge) |
 
 Known weaknesses:
 
-- **Forward recipients are lost.** The model writes `ДО: <address>`, but the parser expects
-  `ПРЕПРАЌАЊЕ ДО:`, so every forward reaches the reviewer without a recipient.
-- **Forwards are ignored.** Supplier invoices and tenders get `IGNORE`, which skips review entirely.
-- **No injection gate.** Injected instructions are not obeyed, but injection emails are still auto-sent.
+- **No injection gate.** Injected instructions are not obeyed, but injection emails are still auto-sent
+  (3 of the 4 remaining missed reviews).
+- **Business email gets `IGNORE` or the wrong action.** Invoices, tenders and payment reminders are labelled
+  `IGNORE` (they now go to review instead of being dropped), and a large catalog quote gets a reply instead of a
+  forward. A job application with an injected instruction is classified as spam and ignored.
+- **Retrieval misses the right document in about a quarter of cases.** The keyword ranking is dominated by common
+  words. When `routing.md` is not retrieved, a forward has no recipient, and complaint replies leave out the
+  reprint-or-refund policy and the 7-day complaint window.
+- **Urgent replies have the wrong tone.** They ask the customer to call during business hours instead of
+  promising a callback.
 
 ---
 
