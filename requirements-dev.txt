@@ -2,6 +2,6 @@
 pytest>=8.2
 pytest-asyncio>=0.23
 fakeredis[lua]>=2.23
-mypy>=1.10
-ruff>=0.5
+mypy==2.4.0
+ruff==0.16.10
 celery-types>=0.22
