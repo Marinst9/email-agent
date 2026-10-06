@@ -63,7 +63,7 @@ A production-grade, multi-agent AI email processing and response system built wi
 
 4. Verify running services:
    - API Docs (Swagger): http://localhost:8000/docs
-   - Health Check: http://localhost:8000/health
+   - Health Check: http://localhost:8000/healthz
 
 ---
 
