@@ -200,18 +200,27 @@ class EmailOrchestrator:
         self._drafter = DraftAgent(client, model)
         self._reviewer = ReviewAgent()
 
+    async def classify(self, email: GmailMessage, on_stage: StageCallback = _no_progress) -> Classification:
+        await on_stage(TaskStage.CLASSIFYING)
+        classification = await self._classifier.execute(email)
+        logger.debug("Classification: %s", classification)
+        return classification
+
+    def review(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
+        return self._reviewer.execute(draft, classification)
+
     async def process(
         self,
         email: GmailMessage,
         user_email: str,
         thread_history: Sequence[ThreadTurn],
         on_stage: StageCallback = _no_progress,
+        classification: Classification | None = None,
     ) -> OrchestrationResult:
+        """Classify (unless `classification` is given), retrieve, draft and review one email."""
         logger.info("Orchestrator: processing email from %s", email.sender)
-
-        await on_stage(TaskStage.CLASSIFYING)
-        classification = await self._classifier.execute(email)
-        logger.debug("Classification: %s", classification)
+        if classification is None:
+            classification = await self.classify(email, on_stage)
 
         if classification.category == "SPAM":
             return OrchestrationResult(

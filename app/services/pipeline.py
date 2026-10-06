@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import InboundEmail
 from app.models.enums import TEMPLATE_SOURCE_PREFIX, DraftAction, EmailSource, EmailStatus, InboundStatus
+from app.schemas.agent import DraftResult
 from app.schemas.email import EmailLogCreate, GmailMessage
 from app.schemas.tasks import TaskStage
 from app.services.ai_agents import EmailOrchestrator, StageCallback
@@ -88,22 +89,43 @@ class EmailPipeline:
         if not await self._rate_limiter.allow(row.user_email, row.sender, row.id):
             return await self._ignore(row, reason="Reply rate limit reached for this sender", log=False)
 
+        message = GmailMessage(
+            id=row.gmail_message_id, thread_id=row.thread_id, sender=row.sender, subject=row.subject, body=row.body
+        )
+        # Transient LLM errors propagate from here; nothing has been written yet, so a retry starts clean.
+        # Classification runs before template matching so a template reply to an urgent email or a
+        # complaint goes through the same review rules as an AI draft.
+        classification = await self._orchestrator.classify(message, on_stage=self._on_stage)
+
         templates = await self._templates.list_for_user(row.user_email)
         template = find_matching_template(row.subject, row.body, templates)
-        if template is not None:
+        if template is not None and classification.category != "SPAM":
+            reasoning = f"Шаблонот '{template.name}' се совпаѓа со содржината на мејлот."
+            draft = DraftResult(
+                raw=template.response,
+                action=DraftAction.REPLY,
+                response_text=template.response,
+                confidence=1.0,
+                docs_used=[],
+                reasoning=reasoning,
+            )
+            review = self._orchestrator.review(draft, classification)
             row.response = template.response
+            row.action = DraftAction.REPLY.value
             row.source = f"{TEMPLATE_SOURCE_PREFIX}: {template.name}"
-            row.category, row.priority, row.sentiment = "INQUIRY", "MEDIUM", "neutral"
-            row.confidence = 1.0
-            row.reasoning = f"Шаблонот '{template.name}' се совпаѓа со содржината на мејлот."
+            row.category = classification.category
+            row.priority = classification.priority
+            row.sentiment = classification.sentiment
+            row.confidence = draft.confidence
+            row.reasoning = reasoning
             row.docs_used = []
+            row.needs_review = review.needs_review
+            row.review_reason = review.reason
         else:
             history = await self._log.thread_history(row.user_email, row.thread_id)
-            message = GmailMessage(
-                id=row.gmail_message_id, thread_id=row.thread_id, sender=row.sender, subject=row.subject, body=row.body
+            result = await self._orchestrator.process(
+                message, row.user_email, history, on_stage=self._on_stage, classification=classification
             )
-            # Transient LLM errors propagate from here; nothing has been written yet, so a retry starts clean.
-            result = await self._orchestrator.process(message, row.user_email, history, on_stage=self._on_stage)
 
             if result.action is DraftAction.IGNORE:
                 return await self._ignore(
