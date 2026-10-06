@@ -2,7 +2,10 @@
 
 QUEUED --filter/rules/LLM--> DRAFTED --deliver--> SENT | AWAITING_REVIEW (always for forwards, and
    |                                                   for auto replies over the per-sender rate limit)
-   \\--> IGNORED (blocked sender, spam, or AI decided to ignore)
+   \\--> IGNORED (blocked sender, spam, or AI decided to ignore clearly automated mail)
+
+When the AI wants to ignore anything else (an invoice, a tender, a CV), the email goes to AWAITING_REVIEW
+instead, so business email is never dropped without a human seeing it.
 
 Ignored emails are never silently dropped: they get the `gmail_ignored_label` label in Gmail and,
 in manual mode, stay unread so the user still sees them.
@@ -110,7 +113,7 @@ class EmailPipeline:
                 docs_used=[],
                 reasoning=reasoning,
             )
-            review = self._orchestrator.review(draft, classification)
+            review = self._orchestrator.review(draft, classification, message)
             row.response = template.response
             row.action = DraftAction.REPLY.value
             row.source = f"{TEMPLATE_SOURCE_PREFIX}: {template.name}"
@@ -128,7 +131,8 @@ class EmailPipeline:
                 message, row.user_email, history, on_stage=self._on_stage, classification=classification
             )
 
-            if result.action is DraftAction.IGNORE:
+            # An IGNORE the review gate did not accept (anything but clear machine mail) waits for a human.
+            if result.action is DraftAction.IGNORE and not result.review.needs_review:
                 return await self._ignore(
                     row, source=EmailSource.AI, category=result.classification.category, reason=result.reasoning
                 )

@@ -46,7 +46,17 @@ DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одго
 ПОРАКА: (текст на одговорот)"""
 
 MESSAGE_MARKER = "ПОРАКА:"
-FORWARD_TO_MARKER = "ПРЕПРАЌАЊЕ ДО:"
+# The recipient line as the model actually writes it: "АКО ПРЕПРАЌАЊЕ ДО: x", "ДО: x", "**TO:** x", "Forward to: x".
+_FORWARD_TO_LINE = re.compile(
+    r"^[\s*_#>-]*(?:АКО\s+)?(?:ПРЕПРАЌАЊЕ\s+ДО|ДО|FORWARD\s+TO|TO)[\s*_]*:(?P<value>.*)$", re.IGNORECASE
+)
+# Senders and bodies that mark mail sent by a machine, which may be ignored without a human looking at it.
+_AUTOMATED_SENDER = re.compile(
+    r"^(?:no-?reply|do-?not-?reply|notifications?|newsletters?|news|bilten|mailer-daemon|postmaster|bounces?)"
+    r"(?:[+._-][^@]*)?@",
+    re.IGNORECASE,
+)
+_UNSUBSCRIBE_MARKERS = ("unsubscribe", "одјавете се", "за одјава")
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
@@ -86,11 +96,21 @@ def parse_draft_action(text: str) -> DraftAction:
 
 
 def parse_forward_to(text: str) -> str | None:
-    """Recipient from the "АКО ПРЕПРАЌАЊЕ ДО:" line; None when missing or "НИКОЈ"."""
-    for line in text.splitlines():
-        if FORWARD_TO_MARKER in line:
-            return normalize_email_address(line.split(FORWARD_TO_MARKER, 1)[1])
+    """Recipient from the recipient line before "ПОРАКА:"; None when missing, "НИКОЈ" or not an email address.
+
+    Only the header part is searched, so a "To:" line inside the drafted message is never taken as the recipient.
+    """
+    for line in text.split(MESSAGE_MARKER, 1)[0].splitlines():
+        if match := _FORWARD_TO_LINE.match(line):
+            return normalize_email_address(match.group("value"))
     return None
+
+
+def is_automated_email(email: GmailMessage) -> bool:
+    """Clearly machine-sent: a no-reply / notification / newsletter address, or a body with an unsubscribe link."""
+    address = normalize_email_address(email.sender) or ""
+    body = email.body.lower()
+    return bool(_AUTOMATED_SENDER.match(address)) or any(marker in body for marker in _UNSUBSCRIBE_MARKERS)
 
 
 def draft_confidence(retrieved_docs: Sequence[RetrievedDoc], has_history: bool) -> float:
@@ -179,9 +199,16 @@ class DraftAgent:
 class ReviewAgent:
     """Rule-based gate deciding whether a draft may be sent without human review."""
 
-    def execute(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
+    def execute(
+        self, draft: DraftResult, classification: Classification, email: GmailMessage | None = None
+    ) -> ReviewDecision:
         reason = ""
-        if draft.action is DraftAction.FORWARD:
+        if draft.action is DraftAction.IGNORE:
+            # Only clear machine mail may disappear unseen; the model also "ignores" invoices, tenders and CVs.
+            if email is not None and is_automated_email(email):
+                return ReviewDecision(needs_review=False, auto_send=False)
+            reason = "AI предлага игнорирање, но мејлот не изгледа како спам или автоматска порака"
+        elif draft.action is DraftAction.FORWARD:
             # Forwarding sends the email to a third party: never without a human.
             reason = "Препраќањето секогаш бара човечка потврда"
             if draft.forward_to is None:
@@ -209,8 +236,8 @@ class EmailOrchestrator:
         logger.debug("Classification: %s", classification)
         return classification
 
-    def review(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
-        return self._reviewer.execute(draft, classification)
+    def review(self, draft: DraftResult, classification: Classification, email: GmailMessage) -> ReviewDecision:
+        return self._reviewer.execute(draft, classification, email)
 
     async def process(
         self,
@@ -241,7 +268,7 @@ class EmailOrchestrator:
         await on_stage(TaskStage.DRAFTING)
         draft = await self._drafter.execute(email, classification, retrieved_docs, thread_history)
         await on_stage(TaskStage.REVIEWING)
-        review = self._reviewer.execute(draft, classification)
+        review = self._reviewer.execute(draft, classification, email)
         logger.info(
             "Orchestrator: action=%s confidence=%s needs_review=%s",
             draft.action,
