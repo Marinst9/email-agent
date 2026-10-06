@@ -1,10 +1,10 @@
-from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.enums import DraftAction as DraftAction
 from app.models.enums import EmailStatus, InboundStatus
-from app.schemas.common import DisplayStr
+from app.schemas.common import DisplayStr, normalize_email_address
 
 # --- Forms -------------------------------------------------------------------
 
@@ -15,6 +15,18 @@ class StartAgentForm(BaseModel):
 
 class ApproveForm(BaseModel):
     custom_response: str | None = None
+    # Only used for FORWARD drafts: lets the reviewer set or correct the recipient.
+    forward_to: str | None = None
+
+    @field_validator("forward_to", mode="before")
+    @classmethod
+    def valid_address(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        address = normalize_email_address(str(value))
+        if address is None:
+            raise ValueError("forward_to must be an email address")
+        return address
 
 
 # --- Multi-agent pipeline ----------------------------------------------------
@@ -33,12 +45,6 @@ class RetrievedDoc(BaseModel):
     similarity: float
 
 
-class DraftAction(StrEnum):
-    REPLY = "ОДГОВОР"
-    FORWARD = "ПРЕПРАЌАЊЕ"
-    IGNORE = "ИГНОРИРАЈ"
-
-
 class DraftResult(BaseModel):
     raw: str
     action: DraftAction
@@ -46,7 +52,7 @@ class DraftResult(BaseModel):
     confidence: float
     docs_used: list[str]
     reasoning: str
-    # Recipient when action is FORWARD (used by the standalone CLI in main.py).
+    # Recipient when action is FORWARD.
     forward_to: str | None = None
 
 
@@ -95,6 +101,8 @@ class PendingEmail(BaseModel):
     sentiment: DisplayStr
     needs_review: bool = False
     review_reason: DisplayStr = ""
+    action: DraftAction = DraftAction.REPLY
+    forward_to: str | None = None
 
     @field_validator("body")
     @classmethod

@@ -1,6 +1,6 @@
 """The email processing pipeline executed by the Celery worker for one ingested email.
 
-QUEUED --filter/rules/LLM--> DRAFTED --deliver--> SENT | AWAITING_REVIEW
+QUEUED --filter/rules/LLM--> DRAFTED --deliver--> SENT | AWAITING_REVIEW (always for forwards)
    \\--> IGNORED (automated sender, rate limited, or AI decided to ignore)
 
 Re-running is safe: each run resumes from the persisted status, and a transient LLM failure
@@ -14,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models import InboundEmail
-from app.models.enums import TEMPLATE_SOURCE_PREFIX, EmailSource, EmailStatus, InboundStatus
-from app.schemas.agent import DraftAction
+from app.models.enums import TEMPLATE_SOURCE_PREFIX, DraftAction, EmailSource, EmailStatus, InboundStatus
 from app.schemas.email import EmailLogCreate, GmailMessage
 from app.schemas.tasks import TaskStage
 from app.services.ai_agents import EmailOrchestrator, StageCallback
@@ -112,6 +111,8 @@ class EmailPipeline:
                 )
 
             row.response = result.draft.response_text if result.draft else ""
+            row.action = result.action.value
+            row.forward_to = result.draft.forward_to if result.draft else None
             row.source = EmailSource.MULTI_AGENT.value
             row.category = result.classification.category
             row.priority = result.classification.priority
@@ -126,7 +127,8 @@ class EmailPipeline:
         return InboundStatus.DRAFTED
 
     async def _dispatch(self, row: InboundEmail) -> InboundStatus:
-        if row.auto_send and not row.needs_review:
+        # Only plain replies may go out without a human; forwards always wait for review.
+        if row.auto_send and not row.needs_review and row.action == DraftAction.REPLY.value:
             await self._on_stage(TaskStage.DELIVERING)
             return await self._delivery.auto_send(await self._gmail_for(row.user_email), row)
         await self._inbound.set_status(row, InboundStatus.AWAITING_REVIEW)

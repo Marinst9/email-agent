@@ -7,8 +7,9 @@ used concurrently.
 
 import asyncio
 import base64
+import re
 from collections.abc import Mapping
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -18,6 +19,8 @@ from app.core.config import GMAIL_SCOPE, Settings
 from app.schemas.email import GmailMessage
 
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+FORWARD_SEPARATOR = "---------- Forwarded message ---------"
+_FORWARD_PREFIX = re.compile(r"^\s*(fwd?|пр)\s*:", re.IGNORECASE)
 
 
 class GmailClient:
@@ -56,11 +59,28 @@ class GmailClient:
         )
 
     async def send_reply(self, to: str, subject: str, text: str) -> None:
-        mime = MIMEText(text)
-        mime["To"] = to
-        mime["Subject"] = f"Re: {subject}"
-        raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
-        request = self._service.users().messages().send(userId="me", body={"raw": raw})
+        message = EmailMessage()
+        message["To"] = to
+        message["Subject"] = f"Re: {subject}"
+        message.set_content(text)
+        await self._send(message)
+
+    async def forward(self, to: str, original: GmailMessage, note: str) -> None:
+        """Forward `original` to `to`, with `note` above the quoted original message."""
+        message = EmailMessage()
+        message["To"] = to
+        message["Subject"] = forward_subject(original.subject)
+        intro = f"{note.strip()}\n\n" if note.strip() else ""
+        message.set_content(
+            f"{intro}{FORWARD_SEPARATOR}\nFrom: {original.sender}\nSubject: {original.subject}\n\n{original.body}"
+        )
+        await self._send(message)
+
+    async def _send(self, message: EmailMessage, thread_id: str | None = None) -> None:
+        body: dict[str, str] = {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
+        if thread_id:
+            body["threadId"] = thread_id
+        request = self._service.users().messages().send(userId="me", body=body)
         await asyncio.to_thread(request.execute)
 
     async def mark_as_read(self, message_id: str) -> None:
@@ -68,6 +88,10 @@ class GmailClient:
             userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
         )
         await asyncio.to_thread(request.execute)
+
+
+def forward_subject(subject: str) -> str:
+    return subject if _FORWARD_PREFIX.match(subject) else f"Fwd: {subject}"
 
 
 def _decode(data: str) -> str:

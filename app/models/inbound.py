@@ -5,7 +5,7 @@ from sqlalchemy import JSON, Float, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, utcnow
-from app.models.enums import InboundStatus
+from app.models.enums import DraftAction, InboundStatus
 
 
 def _new_id() -> str:
@@ -47,6 +47,9 @@ class InboundEmail(Base):
     docs_used: Mapped[list[str] | None] = mapped_column(JSON)
     needs_review: Mapped[bool] = mapped_column(default=False)
     review_reason: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(String(20), default=DraftAction.REPLY.value)
+    # Recipient of a FORWARD draft (proposed by the AI, possibly corrected by the reviewer).
+    forward_to: Mapped[str | None] = mapped_column(String(320))
 
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)

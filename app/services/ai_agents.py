@@ -17,6 +17,7 @@ from app.schemas.agent import (
     RetrievedDoc,
     ReviewDecision,
 )
+from app.schemas.common import normalize_email_address
 from app.schemas.email import GmailMessage, ThreadTurn
 from app.schemas.tasks import TaskStage
 
@@ -44,6 +45,7 @@ DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одго
 ПОРАКА: (текст на одговорот)"""
 
 MESSAGE_MARKER = "ПОРАКА:"
+FORWARD_TO_MARKER = "ПРЕПРАЌАЊЕ ДО:"
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
@@ -76,6 +78,14 @@ def parse_draft_action(text: str) -> DraftAction:
     if "АКЦИЈА: ПРЕПРАЌАЊЕ" in text:
         return DraftAction.FORWARD
     return DraftAction.IGNORE
+
+
+def parse_forward_to(text: str) -> str | None:
+    """Recipient from the "АКО ПРЕПРАЌАЊЕ ДО:" line; None when missing or "НИКОЈ"."""
+    for line in text.splitlines():
+        if FORWARD_TO_MARKER in line:
+            return normalize_email_address(line.split(FORWARD_TO_MARKER, 1)[1])
+    return None
 
 
 def draft_confidence(retrieved_docs: Sequence[RetrievedDoc], has_history: bool) -> float:
@@ -147,10 +157,11 @@ class DraftAgent:
             ],
         )
         text = _first_text(response.content)
+        action = parse_draft_action(text)
 
         return DraftResult(
             raw=text,
-            action=parse_draft_action(text),
+            action=action,
             response_text=text.split(MESSAGE_MARKER)[-1].strip() if MESSAGE_MARKER in text else "",
             confidence=draft_confidence(retrieved_docs, bool(thread_history)),
             docs_used=[d.content[:100] for d in retrieved_docs],
@@ -158,6 +169,7 @@ class DraftAgent:
                 f"Одговорот е генериран врз основа на {len(retrieved_docs)} документи "
                 f"и категоријата {classification.category}."
             ),
+            forward_to=parse_forward_to(text) if action is DraftAction.FORWARD else None,
         )
 
 
@@ -166,7 +178,12 @@ class ReviewAgent:
 
     def execute(self, draft: DraftResult, classification: Classification) -> ReviewDecision:
         reason = ""
-        if classification.category in ("COMPLAINT", "URGENT_HUMAN"):
+        if draft.action is DraftAction.FORWARD:
+            # Forwarding sends the email to a third party: never without a human.
+            reason = "Препраќањето секогаш бара човечка потврда"
+            if draft.forward_to is None:
+                reason += " (не е наведен примач)"
+        elif classification.category in ("COMPLAINT", "URGENT_HUMAN"):
             reason = f"Категорија: {classification.category} бара човечка интервенција"
         elif classification.priority == "HIGH":
             reason = "Висок приоритет — препорачана човечка проверка"

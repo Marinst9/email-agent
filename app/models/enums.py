@@ -32,6 +32,14 @@ TERMINAL_INBOUND_STATUSES = frozenset(
 )
 
 
+class DraftAction(StrEnum):
+    """What the drafting agent decided to do with an email (persisted on `InboundEmail.action`)."""
+
+    REPLY = "ОДГОВОР"
+    FORWARD = "ПРЕПРАЌАЊЕ"
+    IGNORE = "ИГНОРИРАЈ"
+
+
 class EmailSource(StrEnum):
     MULTI_AGENT = "Multi-Agent AI"
     AI = "AI"
