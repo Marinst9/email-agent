@@ -12,7 +12,6 @@ from app.api.routers import admin, agent, auth, emails_api, health, insights, kn
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.oauth import build_oauth
-from app.core.telemetry import TelemetryMiddleware
 from app.db.session import Database
 from app.services.agent_runner import AgentManager
 from app.services.task_state import TaskStateStore
@@ -58,8 +57,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         same_site="lax",
         https_only=settings.session_https_only,
     )
-    # Added last, so it is the outermost middleware and measures the full request.
-    app.add_middleware(TelemetryMiddleware)
     register_exception_handlers(app)
 
     for module in (health, auth, agent, rules, insights, knowledge, admin, emails_api):

@@ -14,6 +14,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import Message, MessageParam
 from pydantic import BaseModel, ValidationError
 
+from app.core.telemetry import log_usage
 from app.schemas.agent import OrchestrationResult, RetrievedDoc
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ async def create_validated(
         response = await client.messages.create(
             model=model, max_tokens=max_tokens, system=system, messages=conversation
         )
+        log_usage(f"structured_output:{output_model.__name__}:attempt{attempt}", response)
         if response.stop_reason == "refusal":
             raise StructuredOutputError("Claude declined to answer this request")
 

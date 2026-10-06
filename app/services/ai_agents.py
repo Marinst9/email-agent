@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import TextBlock
 from pydantic import ValidationError
 
+from app.core.telemetry import log_usage
 from app.schemas.agent import (
     Classification,
     DraftAction,
@@ -107,6 +108,7 @@ class ClassificationAgent:
                 {"role": "user", "content": f"Од: {email.sender}\nНаслов: {email.subject}\nСодржина: {email.body[:300]}"}
             ],
         )
+        log_usage("classify", response)
         return parse_classification(_first_text(response.content))
 
 
@@ -156,6 +158,7 @@ class DraftAgent:
                 }
             ],
         )
+        log_usage("draft", response)
         text = _first_text(response.content)
         action = parse_draft_action(text)
 
