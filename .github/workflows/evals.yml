@@ -1,0 +1,76 @@
+name: Evals
+
+# Runs the eval suite against the real Anthropic API. Manual only: every run costs money.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Agent model (empty = app default)"
+        required: false
+        default: ""
+      judge_model:
+        description: "Judge model"
+        required: false
+        default: "claude-opus-5-5"
+      compare_baseline:
+        description: "Fail if a key metric drops more than allowed vs evals/baseline.json"
+        type: boolean
+        default: true
+      max_drop:
+        description: "Allowed drop for rate metrics (0.05 = 5 points)"
+        required: false
+        default: "0.05"
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore eval cache
+        uses: actions/cache@v4
+        with:
+          path: evals/.cache
+          key: evals-cache-${{ github.sha }}
+          restore-keys: evals-cache-
+
+      - name: Run evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ inputs.model }}
+          EVAL_JUDGE_MODEL: ${{ inputs.judge_model }}
+          MAX_DROP: ${{ inputs.max_drop }}
+          COMPARE_BASELINE: ${{ inputs.compare_baseline }}
+        run: |
+          if [ "$COMPARE_BASELINE" = "true" ]; then
+            python -m evals.run --max-drop "$MAX_DROP" --baseline
+          else
+            python -m evals.run --max-drop "$MAX_DROP"
+          fi
+
+      - name: Add report to job summary
+        if: always()
+        run: cat evals/reports/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.run_number }}
+          path: evals/reports/
+          if-no-files-found: warn

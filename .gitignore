@@ -14,3 +14,8 @@ instance/
 chroma_db/
 *.db
 *.sqlite3
+
+# Eval run artifacts (the cache can be rebuilt; reports are uploaded by CI)
+evals/.cache/
+evals/reports/*
+!evals/reports/.gitkeep

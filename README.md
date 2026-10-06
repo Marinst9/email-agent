@@ -106,6 +106,65 @@ The worker can be scaled with replicas or by changing `--concurrency` in `railwa
 
 ---
 
+## 📊 Evaluation
+
+`evals/` measures how well the agent works and catches regressions when prompts or models change. It runs
+the real orchestrator (classification → retrieval → drafting → review) against the real Anthropic API. Gmail
+and the database are not touched, and nothing is ever sent.
+
+- **Dataset**: `evals/dataset/cases.jsonl` has 60 synthetic emails (34 Macedonian, 26 English): inquiries,
+  complaints, urgent cases, spam/newsletters, emails that should be forwarded, and 8 prompt-injection
+  attempts. Each case has the expected category, priority and action, whether it must go to human review, and
+  facts the reply must or must not contain. Retrieval uses the knowledge-base fixture in
+  `evals/dataset/knowledge_base/` (a fictional print shop) with the same ranking as production.
+- **Metrics**: classification, priority and action accuracy with confusion matrices; review recall on
+  must-review cases; injection resistance; retrieval hit rate; draft quality from an LLM judge (Pydantic-validated
+  1–5 scores for faithfulness, answering the question, language and tone, plus required-fact checks); latency
+  p50/p95; and cost from token usage.
+- **Cache**: results are keyed by a hash of the case, the pipeline code and prompts, the model and the knowledge
+  base. A rerun only calls the API for what changed, and a fully cached run takes seconds.
+
+Run it (reads `ANTHROPIC_API_KEY` from the environment or `.env`):
+
+    python -m evals.run                        # full run -> evals/reports/<timestamp>.md + .json
+    python -m evals.run --only inj fwd         # only cases whose id starts with inj or fwd
+    python -m evals.run --baseline             # exit 1 if a key metric drops vs evals/baseline.json
+    python -m evals.run --baseline --max-drop 0.03 --max-score-drop 0.2
+    python -m evals.run --write-baseline       # accept this run's metrics as the new baseline
+
+Allowed drops default to 5 points for rates and 0.25 for the 1–5 draft score. Per-metric `max_drop` entries in
+`evals/baseline.json` take precedence; review recall and injection resistance are set to 0. In GitHub, the
+**Evals** workflow (Actions → Evals → Run workflow) runs the suite with the `ANTHROPIC_API_KEY` secret and
+uploads the report as an artifact.
+
+### Current results
+
+Agent `claude-sonnet-4-6`, judge `claude-opus-5-5`, 60 cases (2026-10-06):
+
+| Metric | Value |
+| --- | --- |
+| Classification accuracy | 96.7% |
+| Priority accuracy | 73.3% |
+| Action accuracy | 85.0% |
+| Forward recipient accuracy | 0.0% |
+| Review recall (must-review cases flagged) | 74.1% |
+| Injection resistance | 100.0% |
+| Retrieval hit rate | 73.8% |
+| Required facts present | 88.6% |
+| Draft quality (1–5) | 4.28 (faithfulness 4.30, answers 4.40, language 4.57, tone 3.87) |
+| Drafts sendable unedited | 63.3% |
+| Latency p50 / p95 | 7.8 s / 13.9 s |
+| Cost per email | $0.0065 (full run: $0.39 pipeline + $0.87 judge) |
+
+Known weaknesses:
+
+- **Forward recipients are lost.** The model writes `ДО: <address>`, but the parser expects
+  `ПРЕПРАЌАЊЕ ДО:`, so every forward reaches the reviewer without a recipient.
+- **Forwards are ignored.** Supplier invoices and tenders get `IGNORE`, which skips review entirely.
+- **No injection gate.** Injected instructions are not obeyed, but injection emails are still auto-sent.
+
+---
+
 ## 🧪 Running Tests
 
 To run unit and integration test suites locally:

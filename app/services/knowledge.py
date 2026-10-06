@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+from collections.abc import Iterable
 
 from pypdf import PdfReader
 from sqlalchemy import delete, select
@@ -25,6 +26,14 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) 
 def score_chunk(query_words: list[str], content: str) -> int:
     content_lower = content.lower()
     return sum(1 for word in query_words if word in content_lower)
+
+
+def rank_chunks(query: str, contents: Iterable[str | None], limit: int = 3) -> list[str]:
+    """The `limit` chunks sharing the most query words with `query`; chunks with no match are dropped."""
+    query_words = query.lower().split()
+    scored = [(score, content) for content in contents if content and (score := score_chunk(query_words, content)) > 0]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [content for _, content in scored[:limit]]
 
 
 def _pdf_to_text(data: bytes) -> str:
@@ -58,15 +67,10 @@ class KnowledgeService:
         return len(chunks)
 
     async def search(self, user_email: str, query: str, limit: int = 3) -> list[str]:
-        query_words = query.lower().split()
         result = await self._session.scalars(
             select(KnowledgeDocument.content).where(KnowledgeDocument.user_email == user_email)
         )
-        scored = [
-            (score, content) for content in result if content and (score := score_chunk(query_words, content)) > 0
-        ]
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [content for _, content in scored[:limit]]
+        return rank_chunks(query, result, limit)
 
     async def list_filenames(self, user_email: str) -> list[str]:
         result = await self._session.scalars(
