@@ -67,6 +67,8 @@ def compute_summary(cases: Sequence[EvalCase], results: Sequence[CaseResult]) ->
     forwards = [(c, out) for c, _, out in outs if c.expected_action == "FORWARD"]
     injections = [(c, r) for c, r, _ in outs if c.injection]
     retrieval = [(c, out) for c, _, out in outs if c.kb_refs and out.category != "SPAM"]
+    replies = [(c, out) for c, _, out in outs if out.action == "REPLY"]
+    cited = [(c, name) for c, out in replies if c.kb_refs for name in out.cited_sources]
     judged = [
         (c, r.judge) for c, r, _ in outs if r.judge is not None and c.expected_action == "REPLY" and not c.injection
     ]
@@ -96,6 +98,8 @@ def compute_summary(cases: Sequence[EvalCase], results: Sequence[CaseResult]) ->
             sum(any(s in c.kb_refs for s in o.retrieved_sources) for c, o in retrieval), len(retrieval)
         ),
         "facts_recall": _rate(facts_present, facts_total),
+        "citation_rate": _rate(sum(bool(o.cited_sources) for _, o in replies), len(replies)),
+        "citation_precision": _rate(sum(name in c.kb_refs for c, name in cited), len(cited)),
         "draft_quality": round(statistics.mean(j.overall for _, j in judged), 3) if judged else None,
         "draft_faithfulness": mean_score("faithfulness"),
         "draft_answers_question": mean_score("answers_question"),
@@ -200,7 +204,8 @@ def render_report(
     lines = [
         f"# Email agent evaluation — {summary['timestamp']}",
         "",
-        f"Agent model `{summary['model']}`, judge model `{summary['judge_model']}`. "
+        f"Agent model `{summary['model']}`, judge model `{summary['judge_model']}`, "
+        f"embeddings `{summary.get('embedding_model')}`, reranker `{summary.get('rerank_model')}`. "
         f"{summary['completed']}/{summary['cases']} cases completed, {summary['judged_cases']} drafts judged.",
         "",
         "## Key metrics",
@@ -216,6 +221,8 @@ def render_report(
         f"| Over-review rate (simple inquiries flagged) | {_fmt(m['over_review_rate'])} |",
         f"| **Injection resistance** | **{_fmt(m['injection_resistance'])}** |",
         f"| Retrieval hit rate | {_fmt(m['retrieval_hit_rate'])} |",
+        f"| Replies citing a source / citations from the right document | {_fmt(m.get('citation_rate'))} / "
+        f"{_fmt(m.get('citation_precision'))} |",
         f"| Required facts present | {_fmt(m['facts_recall'])} |",
         f"| Draft quality (judge, 1–5) | {_fmt(m['draft_quality'], pct=False)} |",
         f"| ↳ faithfulness / answers / language / tone | {_fmt(m['draft_faithfulness'], False)} / "

@@ -81,6 +81,8 @@ class PipelineOutput(BaseModel):
     # Mirrors `EmailPipeline._dispatch`: only an unreviewed REPLY goes out without a human.
     would_auto_send: bool
     retrieved_sources: list[str] = Field(default_factory=list)
+    # Files of the knowledge-base chunks the draft cites.
+    cited_sources: list[str] = Field(default_factory=list)
     latency_s: float
     calls: list[CallUsage] = Field(default_factory=list)
 

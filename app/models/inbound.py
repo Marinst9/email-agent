@@ -48,6 +48,8 @@ class InboundEmail(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     reasoning: Mapped[str | None] = mapped_column(Text)
     docs_used: Mapped[list[str] | None] = mapped_column(JSON)
+    # Knowledge-base chunks the draft cites: [{chunk_id, filename, page, snippet}], shown to the reviewer.
+    citations: Mapped[list[dict[str, object]] | None] = mapped_column(JSON)
     needs_review: Mapped[bool] = mapped_column(default=False)
     review_reason: Mapped[str | None] = mapped_column(Text)
     action: Mapped[str] = mapped_column(String(20), default=DraftAction.REPLY.value)

@@ -101,7 +101,7 @@ def test_is_automated_email(sender: str, body: str, automated: bool) -> None:
 
 
 def _ignore_draft() -> DraftResult:
-    return DraftResult(raw="", action=DraftAction.IGNORE, response_text="", confidence=0.99, docs_used=[], reasoning="")
+    return DraftResult(raw="", action=DraftAction.IGNORE, response_text="", reasoning="")
 
 
 def test_review_agent_only_lets_machine_mail_be_ignored() -> None:

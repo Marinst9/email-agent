@@ -22,6 +22,13 @@ from anthropic import AsyncAnthropic
 from dotenv import dotenv_values
 
 from app.core.config import Settings
+from app.services.embeddings import (
+    DEFAULT_LOCAL_MODEL,
+    DEFAULT_VOYAGE_MODEL,
+    EmbeddingProvider,
+    LocalEmbeddingProvider,
+    VoyageEmbeddingProvider,
+)
 from evals.harness import (
     KnowledgeBase,
     ResultCache,
@@ -56,6 +63,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--only", nargs="*", default=None, help="Run only cases whose id starts with one of these")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM-as-judge scoring")
+    parser.add_argument(
+        "--embedding-provider",
+        choices=["local", "voyage", "none"],
+        default=None,
+        help="Embeddings for retrieval (default: EMBEDDING_PROVIDER or local); none = full-text only",
+    )
+    parser.add_argument("--rerank", action="store_true", help="Rerank retrieval candidates with Claude")
+    parser.add_argument("--rerank-model", default=os.environ.get("RERANK_MODEL", "claude-haiku-4-5"))
     parser.add_argument("--no-cache", action="store_true", help="Ignore and do not write cached results")
     parser.add_argument("--cache-dir", type=Path, default=EVALS_DIR / ".cache")
     parser.add_argument("--out-dir", type=Path, default=EVALS_DIR / "reports")
@@ -75,6 +90,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _embedding_provider(args: argparse.Namespace) -> str:
+    return str(args.embedding_provider or _env("EMBEDDING_PROVIDER") or "local")
+
+
+def embedding_model_name(args: argparse.Namespace) -> str:
+    if _embedding_provider(args) == "voyage":
+        return _env("VOYAGE_MODEL") or DEFAULT_VOYAGE_MODEL
+    return _env("LOCAL_EMBEDDING_MODEL") or DEFAULT_LOCAL_MODEL
+
+
+def build_embedder(args: argparse.Namespace) -> EmbeddingProvider | None:
+    provider = _embedding_provider(args)
+    if provider == "none":
+        return None
+    if provider == "voyage":
+        api_key = _env("VOYAGE_API_KEY")
+        if not api_key:
+            raise SystemExit("--embedding-provider voyage needs VOYAGE_API_KEY (environment or .env).")
+        return VoyageEmbeddingProvider(api_key, embedding_model_name(args))
+    return LocalEmbeddingProvider(embedding_model_name(args))
+
+
 def _env(name: str) -> str | None:
     """Environment first, then the project's .env file. Values are never logged."""
     return os.environ.get(name) or dotenv_values(EVALS_DIR.parent / ".env").get(name) or None
@@ -88,6 +125,7 @@ async def evaluate_case(
     judge_model: str | None,
     kb: KnowledgeBase,
     fingerprint: str,
+    rerank_model: str | None,
     cache: ResultCache,
     semaphore: asyncio.Semaphore,
 ) -> CaseResult:
@@ -98,7 +136,7 @@ async def evaluate_case(
         result.pipeline_cached = output is not None
         if output is None:
             try:
-                output = await run_pipeline(case, client, model, kb)
+                output = await run_pipeline(case, client, model, kb, rerank_model)
             except Exception as exc:  # report the failure and keep evaluating the other cases
                 result.error = f"pipeline: {type(exc).__name__}: {exc}"
                 return result
@@ -125,10 +163,11 @@ async def evaluate(args: argparse.Namespace, api_key: str, model: str) -> tuple[
     cases = load_cases(args.dataset)
     if args.only:
         cases = [c for c in cases if c.id.startswith(tuple(args.only))]
-    kb = KnowledgeBase(args.knowledge_base)
+    kb = await KnowledgeBase.load(args.knowledge_base, build_embedder(args), args.cache_dir)
+    rerank_model = args.rerank_model if args.rerank else None
     cache = ResultCache(None if args.no_cache else args.cache_dir)
     semaphore = asyncio.Semaphore(args.concurrency)
-    fingerprint = pipeline_fingerprint(model, kb)
+    fingerprint = pipeline_fingerprint(model, kb, rerank_model)
 
     async with AsyncAnthropic(api_key=api_key, max_retries=6) as client:
         done = 0
@@ -142,6 +181,7 @@ async def evaluate(args: argparse.Namespace, api_key: str, model: str) -> tuple[
                 judge_model=None if args.no_judge else args.judge_model,
                 kb=kb,
                 fingerprint=fingerprint,
+                rerank_model=rerank_model,
                 cache=cache,
                 semaphore=semaphore,
             )
@@ -171,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         "timestamp": timestamp,
         "model": model,
         "judge_model": None if args.no_judge else args.judge_model,
+        "embedding_model": None if args.embedding_provider == "none" else embedding_model_name(args),
+        "rerank_model": args.rerank_model if args.rerank else None,
         **compute_summary(cases, results),
     }
     summary["cost"]["fresh_api_calls_this_run"] = sum(

@@ -26,6 +26,10 @@ google-auth>=2.29
 google-api-python-client>=2.130
 pypdf>=4.2
 
+# Knowledge-base retrieval: pgvector column type, Voyage AI embeddings API client
+pgvector>=0.4
+voyageai>=0.5
+
 # Used only by the standalone CLI script main.py
 google-auth-oauthlib>=1.2
 python-dotenv>=1.0

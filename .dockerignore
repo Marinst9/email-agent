@@ -19,3 +19,5 @@ legacy_flask/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+evals/.cache/
+evals/reports/

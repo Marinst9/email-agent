@@ -77,6 +77,20 @@ class Settings(DatabaseSettings):
     # Knowledge base uploads
     max_upload_bytes: int = 10 * 1024 * 1024
 
+    # Knowledge base retrieval (embeddings run in the Celery worker)
+    embedding_provider: Literal["local", "voyage"] = "local"
+    local_embedding_model: str = "intfloat/multilingual-e5-large"
+    voyage_api_key: SecretStr | None = None
+    voyage_model: str = "voyage-4"
+    chunk_max_tokens: int = 200
+    chunk_overlap_tokens: int = 40
+    retrieval_top_k: int = 3
+    # Candidates taken from each of vector and full-text search before Reciprocal Rank Fusion.
+    retrieval_candidates: int = 20
+    rerank_enabled: bool = False
+    rerank_model: str = "claude-haiku-4-5"
+    rerank_candidates: int = 20
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -6,14 +6,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.api.deps import CurrentUserDep, KnowledgeServiceDep, SettingsDep, redirect_to
 from app.core.templating import templates
-from app.services.knowledge import extract_text
+from app.services.knowledge import extract_pages
+from app.worker.dispatch import enqueue_knowledge_embedding
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 
 @router.get("", name="knowledge", response_class=HTMLResponse)
 async def list_documents(request: Request, user: CurrentUserDep, knowledge: KnowledgeServiceDep) -> HTMLResponse:
-    docs = await knowledge.list_filenames(user.email)
+    docs = await knowledge.list_documents(user.email)
     return templates.TemplateResponse(request, "knowledge.html", {"docs": docs, "message": None})
 
 
@@ -36,10 +37,14 @@ async def upload_document(
         message = f"❌ Документот е преголем (макс. {settings.max_upload_bytes // (1024 * 1024)} MB)"
         status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
     else:
-        chunks = await knowledge.add_document(user.email, filename, await extract_text(filename, data))
-        message = f"✅ Документот '{filename}' е додаден ({chunks} парчиња)"
+        chunks = await knowledge.add_document(user.email, filename, await extract_pages(filename, data))
+        message = f"✅ Документот '{filename}' е додаден ({chunks} парчиња), индексирањето е во тек"
+        # Embedding runs in the worker. If the queue is down the chunks stay pending (still found by
+        # full-text search) and are embedded by the next task that runs.
+        if not await enqueue_knowledge_embedding(user.email):
+            message += " (⚠️ индексирањето не можеше да се закаже)"
 
-    docs = await knowledge.list_filenames(user.email)
+    docs = await knowledge.list_documents(user.email)
     return templates.TemplateResponse(
         request, "knowledge.html", {"docs": docs, "message": message}, status_code=status_code
     )

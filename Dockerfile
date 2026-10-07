@@ -7,8 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential gcc libpq-dev
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY requirements.txt requirements-local-embeddings.txt ./
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt -r requirements-local-embeddings.txt
 
 # Stage 2: Final minimal runtime image
 FROM python:3.11-slim

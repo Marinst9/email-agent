@@ -56,8 +56,10 @@
         {% if docs %}
             {% for doc in docs %}
             <div class="doc-item">
-                <span>📄 {{ doc }}</span>
-                <form action="/knowledge/delete/{{ doc }}" method="POST">
+                <span>📄 {{ doc.filename }}
+                    <small style="color:#888;">— {{ doc.chunks }} парчиња{% if doc.pending %}, ⏳ {{ doc.pending }} чекаат индексирање{% endif %}</small>
+                </span>
+                <form action="/knowledge/delete/{{ doc.filename }}" method="POST">
                     <button type="submit" class="btn-delete">🗑 Избриши</button>
                 </form>
             </div>

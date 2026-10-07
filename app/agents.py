@@ -109,7 +109,8 @@ class EmailAgentAnalyzer:
     ) -> OrchestrationResult:
         """Run the whole pipeline in one call, with schema enforcement and the self-correction loop."""
         docs_context = "\n".join(
-            f"[{doc.index}] (Similarity: {doc.similarity:.2f}): {doc.content}" for doc in retrieved_docs
+            f"[{doc.chunk_id}] ({doc.filename or 'document'}, relevance score {doc.score:.4f}): {doc.content}"
+            for doc in retrieved_docs
         )
         system_prompt = (
             "You are an enterprise email processing agent. "
@@ -130,8 +131,9 @@ class EmailAgentAnalyzer:
             max_attempts=max_retries,
         )
 
-        # Safeguard: low-confidence results always go to a human.
-        if result.confidence < LOW_CONFIDENCE_THRESHOLD and not result.review.needs_review:
+        # Safeguard: low (or missing) self-reported confidence always goes to a human.
+        low_confidence = result.confidence is None or result.confidence < LOW_CONFIDENCE_THRESHOLD
+        if low_confidence and not result.review.needs_review:
             result.review.needs_review = True
             result.review.auto_send = False
             result.review.reason = f"{result.review.reason} [Auto-flagged: Low confidence score]".strip()

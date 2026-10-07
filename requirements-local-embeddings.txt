@@ -1,0 +1,5 @@
+# Local embedding model (EMBEDDING_PROVIDER=local, the default), used by the Celery worker.
+# CPU-only PyTorch wheels keep the image small; the model itself (~2.2 GB) is downloaded on first use.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.9
+sentence-transformers>=6.0

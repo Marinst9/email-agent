@@ -28,10 +28,12 @@ from app.schemas.tasks import TaskStage
 from app.services.ai_agents import EmailOrchestrator, StageCallback
 from app.services.delivery import EmailDeliveryService
 from app.services.email_log import EmailLogService
+from app.services.embeddings import EmbeddingProvider
 from app.services.gmail import GmailClient
 from app.services.inbound import InboundEmailService
 from app.services.knowledge import KnowledgeService
 from app.services.rate_limit import RedisReplyRateLimiter
+from app.services.retrieval import LLMReranker
 from app.services.rules import BlockedSenderService, ReplyTemplateService, find_matching_template
 from app.services.users import UserService
 
@@ -54,6 +56,7 @@ class EmailPipeline:
         ai_client: AsyncAnthropic,
         rate_limiter: RedisReplyRateLimiter,
         on_stage: StageCallback,
+        embedder: EmbeddingProvider | None = None,
     ) -> None:
         self._settings = settings
         self._rate_limiter = rate_limiter
@@ -64,7 +67,14 @@ class EmailPipeline:
         self._templates = ReplyTemplateService(session)
         self._users = UserService(session)
         self._delivery = EmailDeliveryService(session)
-        self._orchestrator = EmailOrchestrator(ai_client, settings.anthropic_model, KnowledgeService(session))
+        self._orchestrator = EmailOrchestrator(
+            ai_client,
+            settings.anthropic_model,
+            KnowledgeService(session, embedder, candidates=settings.retrieval_candidates),
+            reranker=LLMReranker(ai_client, settings.rerank_model) if settings.rerank_enabled else None,
+            top_k=settings.retrieval_top_k,
+            rerank_candidates=settings.rerank_candidates,
+        )
         self._gmail: GmailClient | None = None
 
     async def run(self, email_id: str) -> InboundStatus:
@@ -109,9 +119,8 @@ class EmailPipeline:
                 raw=template.response,
                 action=DraftAction.REPLY,
                 response_text=template.response,
-                confidence=1.0,
-                docs_used=[],
                 reasoning=reasoning,
+                from_template=True,
             )
             review = self._orchestrator.review(draft, classification, message)
             row.response = template.response
@@ -120,9 +129,10 @@ class EmailPipeline:
             row.category = classification.category
             row.priority = classification.priority
             row.sentiment = classification.sentiment
-            row.confidence = draft.confidence
+            row.confidence = None
             row.reasoning = reasoning
             row.docs_used = []
+            row.citations = []
             row.needs_review = review.needs_review
             row.review_reason = review.reason
         else:
@@ -144,9 +154,11 @@ class EmailPipeline:
             row.category = result.classification.category
             row.priority = result.classification.priority
             row.sentiment = result.classification.sentiment
-            row.confidence = result.confidence
+            row.confidence = None
             row.reasoning = result.reasoning
-            row.docs_used = [d.content[:100] for d in result.retrieved_docs]
+            citations = result.draft.citations if result.draft else []
+            row.docs_used = [f"{c.label()}: {c.snippet[:100]}" for c in citations]
+            row.citations = [c.model_dump() for c in citations]
             row.needs_review = result.review.needs_review
             row.review_reason = result.review.reason
 

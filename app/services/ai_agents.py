@@ -9,8 +9,10 @@ from anthropic import AsyncAnthropic
 from anthropic.types import TextBlock
 from pydantic import ValidationError
 
+from app.agents import StructuredOutputError
 from app.core.telemetry import log_usage
 from app.schemas.agent import (
+    Citation,
     Classification,
     DraftAction,
     DraftResult,
@@ -35,7 +37,7 @@ CLASSIFICATION_PROMPT = """Категоризирај го мејлот. Вра�
 
 DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одговарај на {language} јазик.
 Тонот прилагоди го според sentiment: {sentiment}.
-Ако имаш информации од документи, користи ги за попрецизен одговор.
+Ако имаш ИЗВОРИ од базата на знаење, користи ги за попрецизен одговор.
 ПРАВИЛА:
 - Автоматска нотификација -> АКЦИЈА: ИГНОРИРАЈ
 - Реална личност -> АКЦИЈА: ОДГОВОР
@@ -43,6 +45,7 @@ DRAFT_PROMPT_TEMPLATE = """Ти си AI агент за мејлови. Одго
 Формат:
 АКЦИЈА: ОДГОВОР или ПРЕПРАЌАЊЕ или ИГНОРИРАЈ
 АКО ПРЕПРАЌАЊЕ ДО: (email или НИКОЈ)
+ИЗВОРИ: (броевите на изворите што ги искористи во одговорот, на пр. 12, 15, или НЕМА)
 ПОРАКА: (текст на одговорот)"""
 
 MESSAGE_MARKER = "ПОРАКА:"
@@ -56,12 +59,17 @@ _AUTOMATED_SENDER = re.compile(
     r"(?:[+._-][^@]*)?@",
     re.IGNORECASE,
 )
+_SOURCES_LINE = re.compile(r"^[\s*_#>-]*(?:ИЗВОРИ|SOURCES)[\s*_]*:(?P<value>.*)$", re.IGNORECASE)
 _UNSUBSCRIBE_MARKERS = ("unsubscribe", "одјавете се", "за одјава")
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
 class DocumentSearcher(Protocol):
-    async def search(self, user_email: str, query: str, limit: int = 3) -> list[str]: ...
+    async def search(self, user_email: str, query: str, limit: int = 3) -> list[RetrievedDoc]: ...
+
+
+class Reranker(Protocol):
+    async def rerank(self, query: str, docs: Sequence[RetrievedDoc], top_k: int) -> list[RetrievedDoc]: ...
 
 
 StageCallback = Callable[[TaskStage], Awaitable[None]]
@@ -106,16 +114,25 @@ def parse_forward_to(text: str) -> str | None:
     return None
 
 
+def parse_citations(text: str, retrieved_docs: Sequence[RetrievedDoc]) -> list[Citation]:
+    """Chunks named on the "ИЗВОРИ:" line before "ПОРАКА:". Ids that were not retrieved are dropped."""
+    by_id = {doc.chunk_id: doc for doc in retrieved_docs}
+    for line in text.split(MESSAGE_MARKER, 1)[0].splitlines():
+        if match := _SOURCES_LINE.match(line):
+            ids = dict.fromkeys(int(n) for n in re.findall(r"\d+", match.group("value")))
+            return [Citation.from_doc(by_id[i]) for i in ids if i in by_id]
+    return []
+
+
+def retrieval_query(email: GmailMessage) -> str:
+    return f"{email.subject}\n{email.body[:1500]}"
+
+
 def is_automated_email(email: GmailMessage) -> bool:
     """Clearly machine-sent: a no-reply / notification / newsletter address, or a body with an unsubscribe link."""
     address = normalize_email_address(email.sender) or ""
     body = email.body.lower()
     return bool(_AUTOMATED_SENDER.match(address)) or any(marker in body for marker in _UNSUBSCRIBE_MARKERS)
-
-
-def draft_confidence(retrieved_docs: Sequence[RetrievedDoc], has_history: bool) -> float:
-    confidence = 0.75 + len(retrieved_docs) * 0.05 + (0.05 if has_history else 0.0)
-    return min(round(confidence, 2), 0.99)
 
 
 class ClassificationAgent:
@@ -135,12 +152,26 @@ class ClassificationAgent:
 
 
 class RetrievalAgent:
-    def __init__(self, searcher: DocumentSearcher) -> None:
+    """Hybrid search, optionally followed by reranking a larger candidate set down to `top_k`."""
+
+    def __init__(
+        self, searcher: DocumentSearcher, reranker: Reranker | None = None, top_k: int = 3, rerank_candidates: int = 20
+    ) -> None:
         self._searcher = searcher
+        self._reranker = reranker
+        self._top_k = top_k
+        self._rerank_candidates = rerank_candidates
 
     async def execute(self, user_email: str, query: str) -> list[RetrievedDoc]:
-        docs = await self._searcher.search(user_email, query, limit=3)
-        return [RetrievedDoc(content=doc, index=i, similarity=round(0.95 - i * 0.08, 2)) for i, doc in enumerate(docs)]
+        if self._reranker is None:
+            return await self._searcher.search(user_email, query, limit=self._top_k)
+        candidates = await self._searcher.search(user_email, query, limit=self._rerank_candidates)
+        try:
+            return await self._reranker.rerank(query, candidates, self._top_k)
+        except StructuredOutputError:
+            # Transient API errors still propagate (the task is retried); an unusable ranking just falls back.
+            logger.warning("Reranker returned no usable ranking; using the fused order")
+            return candidates[: self._top_k]
 
 
 class DraftAgent:
@@ -157,7 +188,9 @@ class DraftAgent:
     ) -> DraftResult:
         rag_context = ""
         if retrieved_docs:
-            rag_context = "\nРЕЛЕВАНТНИ ИНФОРМАЦИИ:\n" + "".join(f"- {d.content}\n" for d in retrieved_docs)
+            rag_context = "\nИЗВОРИ:\n" + "".join(
+                f"[ИЗВОР {d.chunk_id}] ({d.filename or 'документ'})\n{d.content}\n\n" for d in retrieved_docs
+            )
 
         history_text = ""
         if thread_history:
@@ -181,16 +214,16 @@ class DraftAgent:
         log_usage("draft", response)
         text = _first_text(response.content)
         action = parse_draft_action(text)
+        citations = parse_citations(text, retrieved_docs)
 
         return DraftResult(
             raw=text,
             action=action,
             response_text=text.split(MESSAGE_MARKER)[-1].strip() if MESSAGE_MARKER in text else "",
-            confidence=draft_confidence(retrieved_docs, bool(thread_history)),
-            docs_used=[d.content[:100] for d in retrieved_docs],
+            citations=citations,
             reasoning=(
-                f"Одговорот е генериран врз основа на {len(retrieved_docs)} документи "
-                f"и категоријата {classification.category}."
+                f"Цитирани извори: {len(citations)} од {len(retrieved_docs)} пронајдени; "
+                f"категорија {classification.category}."
             ),
             forward_to=parse_forward_to(text) if action is DraftAction.FORWARD else None,
         )
@@ -217,16 +250,24 @@ class ReviewAgent:
             reason = f"Категорија: {classification.category} бара човечка интервенција"
         elif classification.priority == "HIGH":
             reason = "Висок приоритет — препорачана човечка проверка"
-        elif draft.confidence < 0.80:
-            reason = f"Низок confidence ({draft.confidence}) — препорачана проверка"
+        elif draft.action is DraftAction.REPLY and not draft.citations and not draft.from_template:
+            reason = "Одговорот не се повикува на ниту еден извор од базата на знаење — препорачана проверка"
         needs_review = bool(reason)
         return ReviewDecision(needs_review=needs_review, reason=reason, auto_send=not needs_review)
 
 
 class EmailOrchestrator:
-    def __init__(self, client: AsyncAnthropic, model: str, searcher: DocumentSearcher) -> None:
+    def __init__(
+        self,
+        client: AsyncAnthropic,
+        model: str,
+        searcher: DocumentSearcher,
+        reranker: Reranker | None = None,
+        top_k: int = 3,
+        rerank_candidates: int = 20,
+    ) -> None:
         self._classifier = ClassificationAgent(client, model)
-        self._retriever = RetrievalAgent(searcher)
+        self._retriever = RetrievalAgent(searcher, reranker, top_k, rerank_candidates)
         self._drafter = DraftAgent(client, model)
         self._reviewer = ReviewAgent()
 
@@ -259,20 +300,19 @@ class EmailOrchestrator:
                 retrieved_docs=[],
                 draft=None,
                 review=ReviewDecision(needs_review=False, auto_send=False),
-                confidence=0.99,
                 reasoning="Мејлот е класифициран како SPAM",
             )
 
         await on_stage(TaskStage.RETRIEVING)
-        retrieved_docs = await self._retriever.execute(user_email, f"{email.subject} {email.body[:200]}")
+        retrieved_docs = await self._retriever.execute(user_email, retrieval_query(email))
         await on_stage(TaskStage.DRAFTING)
         draft = await self._drafter.execute(email, classification, retrieved_docs, thread_history)
         await on_stage(TaskStage.REVIEWING)
         review = self._reviewer.execute(draft, classification, email)
         logger.info(
-            "Orchestrator: action=%s confidence=%s needs_review=%s",
+            "Orchestrator: action=%s citations=%d needs_review=%s",
             draft.action,
-            draft.confidence,
+            len(draft.citations),
             review.needs_review,
         )
 
@@ -282,6 +322,5 @@ class EmailOrchestrator:
             retrieved_docs=retrieved_docs,
             draft=draft,
             review=review,
-            confidence=draft.confidence,
             reasoning=draft.reasoning,
         )

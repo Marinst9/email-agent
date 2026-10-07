@@ -3,10 +3,9 @@
 import pytest
 
 from app.core.config import DatabaseSettings
-from app.schemas.agent import Classification, DraftAction, DraftResult, RetrievedDoc
+from app.schemas.agent import Citation, Classification, DraftAction, DraftResult
 from app.schemas.rules import BlockedWordForm, ReplyTemplateRead
-from app.services.ai_agents import ReviewAgent, draft_confidence, parse_classification, parse_draft_action
-from app.services.knowledge import chunk_text, score_chunk
+from app.services.ai_agents import ReviewAgent, parse_classification, parse_draft_action
 from app.services.rules import find_matching_template, is_blocked_sender
 
 
@@ -45,15 +44,6 @@ def test_blocked_word_form_normalizes() -> None:
     assert BlockedWordForm(word="  Amazon ").word == "amazon"
 
 
-def test_chunk_text_overlaps() -> None:
-    chunks = chunk_text("a" * 1000, size=500, overlap=50)
-    assert [len(c) for c in chunks] == [500, 500, 100]
-
-
-def test_score_chunk_counts_matching_words() -> None:
-    assert score_chunk(["price", "delivery", "xyz"], "Price and DELIVERY terms") == 2
-
-
 def test_parse_classification_handles_code_fences_and_garbage() -> None:
     fenced = '```json\n{"category": "SPAM", "priority": "LOW", "language": "en", "sentiment": "negative"}\n```'
     assert parse_classification(fenced).category == "SPAM"
@@ -66,29 +56,24 @@ def test_parse_draft_action() -> None:
     assert parse_draft_action("something else") is DraftAction.IGNORE
 
 
-def test_draft_confidence_is_capped() -> None:
-    docs = [RetrievedDoc(content="d", index=i, similarity=0.9) for i in range(3)]
-    assert draft_confidence([], has_history=False) == 0.75
-    assert draft_confidence(docs, has_history=True) == 0.95
-    assert draft_confidence(docs * 3, has_history=True) == 0.99
+CITED = [Citation(chunk_id=7, filename="pricing.md", snippet="Визит карти ...")]
 
 
-def _draft(confidence: float) -> DraftResult:
-    return DraftResult(
-        raw="", action=DraftAction.REPLY, response_text="", confidence=confidence, docs_used=[], reasoning=""
-    )
+def _draft(citations: list[Citation]) -> DraftResult:
+    return DraftResult(raw="", action=DraftAction.REPLY, response_text="", citations=citations, reasoning="")
 
 
 @pytest.mark.parametrize(
-    ("classification", "confidence", "needs_review"),
+    ("classification", "citations", "needs_review"),
     [
-        (Classification(category="COMPLAINT"), 0.9, True),
-        (Classification(priority="HIGH"), 0.9, True),
-        (Classification(), 0.75, True),
-        (Classification(), 0.85, False),
+        (Classification(category="COMPLAINT"), CITED, True),
+        (Classification(priority="HIGH"), CITED, True),
+        # A reply that cites nothing from the knowledge base is not grounded: a human checks it.
+        (Classification(), [], True),
+        (Classification(), CITED, False),
     ],
 )
-def test_review_agent(classification: Classification, confidence: float, needs_review: bool) -> None:
-    decision = ReviewAgent().execute(_draft(confidence), classification)
+def test_review_agent(classification: Classification, citations: list[Citation], needs_review: bool) -> None:
+    decision = ReviewAgent().execute(_draft(citations), classification)
     assert decision.needs_review is needs_review
     assert decision.auto_send is not needs_review

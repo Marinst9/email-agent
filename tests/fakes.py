@@ -15,7 +15,7 @@ from anthropic.types import Message, TextBlock, Usage
 from app.core.config import Settings
 from app.models.enums import InboundStatus
 from app.models.inbound import InboundEmail
-from app.schemas.agent import Classification
+from app.schemas.agent import Classification, RetrievedDoc
 from app.schemas.email import EmailLogCreate, ThreadTurn
 from app.schemas.rules import ReplyTemplateRead
 from app.services.ai_agents import CLASSIFICATION_PROMPT
@@ -207,8 +207,13 @@ class FakeRateLimiter:
 
 
 class FakeKnowledge:
-    async def search(self, user_email: str, query: str, limit: int = 3) -> list[str]:
-        return []
+    def __init__(self, docs: Sequence[RetrievedDoc] = ()) -> None:
+        self.docs = list(docs)
+        self.queries: list[tuple[str, int]] = []
+
+    async def search(self, user_email: str, query: str, limit: int = 3) -> list[RetrievedDoc]:
+        self.queries.append((query, limit))
+        return self.docs[:limit]
 
 
 # --- Factories --------------------------------------------------------------------------------
@@ -260,7 +265,16 @@ class PipelineHarness:
         self.log = FakeLog()
         self.ai_client, self.ai = fake_anthropic(classification or Classification(priority="LOW"), draft_text)
         settings = cast(
-            Settings, SimpleNamespace(anthropic_model="claude-sonnet-4-6", gmail_ignored_label="AI-Ignored")
+            Settings,
+            SimpleNamespace(
+                anthropic_model="claude-sonnet-4-6",
+                gmail_ignored_label="AI-Ignored",
+                retrieval_candidates=20,
+                retrieval_top_k=3,
+                rerank_enabled=False,
+                rerank_model="claude-haiku-4-5",
+                rerank_candidates=20,
+            ),
         )
 
         async def no_stage(stage: object) -> None:

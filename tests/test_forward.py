@@ -3,7 +3,7 @@
 import pytest
 
 from app.models.enums import DraftAction, InboundStatus
-from app.schemas.agent import ApproveForm, Classification, DraftResult
+from app.schemas.agent import ApproveForm, Citation, Classification, DraftResult
 from app.schemas.email import GmailMessage
 from app.services.ai_agents import ReviewAgent, parse_forward_to
 from app.services.gmail import forward_subject
@@ -51,9 +51,7 @@ def test_parse_forward_to(text: str, expected: str | None) -> None:
 
 
 def _draft(action: DraftAction, forward_to: str | None = None) -> DraftResult:
-    return DraftResult(
-        raw="", action=action, response_text="", confidence=0.99, docs_used=[], reasoning="", forward_to=forward_to
-    )
+    return DraftResult(raw="", action=action, response_text="", citations=[], reasoning="", forward_to=forward_to)
 
 
 def test_review_agent_always_flags_forwards() -> None:
@@ -61,7 +59,10 @@ def test_review_agent_always_flags_forwards() -> None:
     decision = ReviewAgent().execute(_draft(DraftAction.FORWARD, "smetki@firma.mk"), calm)
     assert decision.needs_review and not decision.auto_send
     assert "не е наведен примач" in ReviewAgent().execute(_draft(DraftAction.FORWARD), calm).reason
-    assert not ReviewAgent().execute(_draft(DraftAction.REPLY), calm).needs_review
+    cited = _draft(DraftAction.REPLY).model_copy(
+        update={"citations": [Citation(chunk_id=1, filename="faq.md", snippet="...")]}
+    )
+    assert not ReviewAgent().execute(cited, calm).needs_review
 
 
 async def test_pipeline_stores_forward_and_never_auto_sends_it() -> None:

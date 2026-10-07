@@ -40,18 +40,51 @@ class Classification(BaseModel):
 
 
 class RetrievedDoc(BaseModel):
+    """A knowledge-base chunk returned by hybrid search, with the scores that ranked it."""
+
+    chunk_id: int
     content: str
-    index: int
-    similarity: float
+    filename: str | None = None
+    chunk_index: int | None = None
+    page: int | None = None
+    # Reciprocal Rank Fusion score of the vector and full-text rankings.
+    score: float
+    # Cosine similarity to the query embedding; None when the chunk came only from full-text search.
+    vector_similarity: float | None = None
+    # Postgres ts_rank_cd; None when the chunk came only from vector search.
+    text_rank: float | None = None
+    # 0-3 relevance from the optional reranker.
+    rerank_score: float | None = None
+
+
+SNIPPET_CHARS = 300
+
+
+class Citation(BaseModel):
+    """A chunk the drafting agent says it used, as shown to the reviewer."""
+
+    chunk_id: int
+    filename: str | None = None
+    page: int | None = None
+    snippet: str
+
+    @classmethod
+    def from_doc(cls, doc: RetrievedDoc) -> "Citation":
+        return cls(chunk_id=doc.chunk_id, filename=doc.filename, page=doc.page, snippet=doc.content[:SNIPPET_CHARS])
+
+    def label(self) -> str:
+        return f"{self.filename or '?'}" + (f", стр. {self.page}" if self.page is not None else "")
 
 
 class DraftResult(BaseModel):
     raw: str
     action: DraftAction
     response_text: str
-    confidence: float
-    docs_used: list[str]
+    # Retrieved chunks the draft cites (only ids that were actually retrieved are kept).
+    citations: list[Citation] = Field(default_factory=list)
     reasoning: str
+    # A user-written reply template, not an AI draft: it needs no knowledge-base grounding.
+    from_template: bool = False
     # Recipient when action is FORWARD.
     forward_to: str | None = None
 
@@ -68,7 +101,8 @@ class OrchestrationResult(BaseModel):
     retrieved_docs: list[RetrievedDoc]
     draft: DraftResult | None
     review: ReviewDecision
-    confidence: float
+    # Only set by `EmailAgentAnalyzer`, where Claude reports its own confidence; the multi-agent pipeline has none.
+    confidence: float | None = None
     reasoning: str
 
 
@@ -97,6 +131,7 @@ class PendingEmail(BaseModel):
     confidence: float | None
     reasoning: DisplayStr
     docs_used: list[str] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
     priority: DisplayStr
     sentiment: DisplayStr
     needs_review: bool = False
@@ -109,7 +144,7 @@ class PendingEmail(BaseModel):
     def preview(cls, value: str) -> str:
         return value[:BODY_PREVIEW_CHARS]
 
-    @field_validator("docs_used", mode="before")
+    @field_validator("docs_used", "citations", mode="before")
     @classmethod
     def none_to_list(cls, value: Any) -> Any:
         return [] if value is None else value

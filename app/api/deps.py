@@ -87,8 +87,9 @@ def get_analytics_service(session: DbSessionDep) -> AnalyticsService:
     return AnalyticsService(session)
 
 
-def get_knowledge_service(session: DbSessionDep) -> KnowledgeService:
-    return KnowledgeService(session)
+def get_knowledge_service(session: DbSessionDep, settings: SettingsDep) -> KnowledgeService:
+    # Web side: uploads and listings only. Searching (and its query embeddings) happens in the worker.
+    return KnowledgeService(session, max_tokens=settings.chunk_max_tokens, overlap_tokens=settings.chunk_overlap_tokens)
 
 
 def get_inbound_service(session: DbSessionDep) -> InboundEmailService:

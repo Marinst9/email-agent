@@ -19,6 +19,7 @@ from redis.asyncio import Redis
 
 from app.core.config import Settings, get_settings
 from app.db.session import Database
+from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.rate_limit import RedisReplyRateLimiter
 from app.services.task_state import TaskStateStore
 
@@ -41,6 +42,8 @@ class WorkerRuntime:
         )
         self.task_states = TaskStateStore(self.redis, settings.task_state_ttl_seconds)
         self.rate_limiter = RedisReplyRateLimiter(self.redis, settings.reply_limit_per_sender_per_hour)
+        # The local model is loaded lazily on first use, so a worker that never embeds never loads it.
+        self.embedder: EmbeddingProvider = build_embedding_provider(settings)
 
     def run(self, coro: Coroutine[Any, Any, T]) -> T:
         task = self.loop.create_task(coro)

@@ -40,6 +40,13 @@ class DraftAction(StrEnum):
     IGNORE = "ИГНОРИРАЈ"
 
 
+class EmbeddingStatus(StrEnum):
+    """Lifecycle of a knowledge-base chunk's embedding (persisted on `KnowledgeDocument.embedding_status`)."""
+
+    PENDING = "pending"  # stored by the upload request, waiting for the worker
+    READY = "ready"
+
+
 class EmailSource(StrEnum):
     MULTI_AGENT = "Multi-Agent AI"
     AI = "AI"

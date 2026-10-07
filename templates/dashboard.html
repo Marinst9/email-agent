@@ -156,7 +156,17 @@
                         <span class="confidence-value">{{ (email.confidence * 100)|int }}%</span>
                     </div>
                     {% endif %}
-                    {% if email.docs_used %}
+                    {% if email.citations %}
+                    <div style="margin-bottom: 8px;">
+                        <span style="font-size:0.8rem; color:#aaa;">📄 Цитирани извори:</span>
+                        {% for c in email.citations %}
+                        <blockquote style="margin:6px 0; padding:6px 10px; border-left:3px solid #667eea; background:#12121f; font-size:0.8rem; color:#ccc;">
+                            <div style="color:#667eea; margin-bottom:3px;">[{{ c.chunk_id }}] {{ c.label() }}</div>
+                            {{ c.snippet }}{% if c.snippet|length >= 300 %}…{% endif %}
+                        </blockquote>
+                        {% endfor %}
+                    </div>
+                    {% elif email.docs_used %}
                     <div style="margin-bottom: 8px;">
                         <span style="font-size:0.8rem; color:#aaa;">📄 Documents used:</span>
                         <div class="docs-used">

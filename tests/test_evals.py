@@ -1,5 +1,6 @@
 """Eval harness logic: dataset integrity, pipeline wiring with a fake client, metrics and baseline checks."""
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from tests.fakes import fake_anthropic
 
 EVALS = Path(__file__).resolve().parent.parent / "evals"
 CASES = load_cases(EVALS / "dataset" / "cases.jsonl")
-KB = KnowledgeBase(EVALS / "dataset" / "knowledge_base")
+# Full-text only (no embedder), so the tests never need the local embedding model.
+KB = asyncio.run(KnowledgeBase.load(EVALS / "dataset" / "knowledge_base", embedder=None))
+PRICING_CHUNK = next(c.chunk_id for c in KB.index.chunks if c.filename == "pricing.md")
 
 
 def _case(**overrides: object) -> EvalCase:
@@ -88,7 +91,8 @@ async def test_run_pipeline_records_usage_and_retrieval_sources() -> None:
     case = _case(subject="Цена за визит карти", body="Колку чинат 500 визит карти?", language="mk")
     client, messages = fake_anthropic(
         Classification(category="INQUIRY", priority="LOW", language="mk"),
-        "АКЦИЈА: ОДГОВОР\nАКО ПРЕПРАЌАЊЕ ДО: НИКОЈ\nПОРАКА: 500 визит карти чинат 2.400 ден.",
+        f"АКЦИЈА: ОДГОВОР\nАКО ПРЕПРАЌАЊЕ ДО: НИКОЈ\nИЗВОРИ: {PRICING_CHUNK}, 9999\n"
+        "ПОРАКА: 500 визит карти чинат 2.400 ден.",
     )
 
     out = await run_pipeline(case, client, "claude-sonnet-4-6", KB)
@@ -96,10 +100,11 @@ async def test_run_pipeline_records_usage_and_retrieval_sources() -> None:
     assert out.action == "REPLY"
     assert out.response_text == "500 визит карти чинат 2.400 ден."
     assert "pricing.md" in out.retrieved_sources
+    assert out.cited_sources == ["pricing.md"]  # 9999 was never retrieved, so it is dropped
     assert len(out.calls) == len(messages.calls) == 2
     assert all(call.cost_usd is not None and call.input_tokens == 100 for call in out.calls)
-    # Three retrieved documents push confidence over the review threshold for a LOW-priority inquiry.
-    assert out.would_auto_send is not out.needs_review
+    # A calm, LOW-priority inquiry that cites the knowledge base passes every review rule.
+    assert out.would_auto_send and not out.needs_review
 
 
 async def test_run_pipeline_spam_is_ignored_without_drafting() -> None:

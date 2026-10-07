@@ -2,9 +2,12 @@
 
 import asyncio
 import contextlib
+import logging
 
 from app.services.task_state import TaskStateStore
-from app.worker.tasks import process_incoming_email_task
+from app.worker.tasks import embed_pending_chunks_task, process_incoming_email_task
+
+logger = logging.getLogger(__name__)
 
 
 class EmailTaskDispatcher:
@@ -22,3 +25,13 @@ class EmailTaskDispatcher:
             with contextlib.suppress(Exception):
                 await self._task_states.mark_failed(email_id, 0, f"Could not queue for processing: {exc}")
             raise
+
+
+async def enqueue_knowledge_embedding(user_email: str) -> bool:
+    """Queue embedding of the user's pending chunks. False if the broker could not be reached."""
+    try:
+        await asyncio.to_thread(embed_pending_chunks_task.apply_async, args=(user_email,))
+    except Exception:
+        logger.exception("Could not queue knowledge embedding for %s", user_email)
+        return False
+    return True

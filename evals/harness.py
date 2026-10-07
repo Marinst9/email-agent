@@ -1,7 +1,8 @@
 """Runs the real orchestrator (classify -> retrieve -> draft -> review) and the LLM judge on eval cases.
 
-Nothing here touches Gmail or the database: retrieval runs over the knowledge-base fixture with the
-same ranking as `KnowledgeService.search`, and the review step is the production `ReviewAgent`.
+Nothing here touches Gmail or the database: retrieval runs over the knowledge-base fixture in an
+in-memory hybrid index (see `evals.hybrid_index`) built with the production chunker, embedding provider,
+query terms and Reciprocal Rank Fusion. The review step is the production `ReviewAgent`.
 """
 
 import hashlib
@@ -16,16 +17,22 @@ from anthropic.types import Message
 from pydantic import BaseModel
 
 import app.services.ai_agents as ai_agents_module
+import app.services.chunking as chunking_module
 import app.services.knowledge as knowledge_module
+import app.services.retrieval as retrieval_module
+import evals.hybrid_index as hybrid_index_module
 from app.agents import create_validated, schema_instructions
+from app.schemas.agent import RetrievedDoc
 from app.schemas.email import GmailMessage
 from app.services.ai_agents import EmailOrchestrator
-from app.services.knowledge import chunk_text, rank_chunks
+from app.services.embeddings import EmbeddingProvider
+from app.services.retrieval import LLMReranker
+from evals.hybrid_index import EmbeddingCache, InMemoryHybridIndex
 from evals.schema import CallUsage, EvalCase, JudgeVerdict, PipelineOutput
 
 EVAL_USER = "eval@lumenprint.mk"
 # Bump to invalidate every cached result after a harness change that affects outputs.
-HARNESS_VERSION = "1"
+HARNESS_VERSION = "2"
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -38,21 +45,34 @@ def load_cases(path: Path) -> list[EvalCase]:
     return [EvalCase.model_validate_json(line) for line in lines if line.strip()]
 
 
-class KnowledgeBase:
-    """The fixture documents, chunked exactly like uploads to `KnowledgeService`."""
+def read_documents(directory: Path) -> dict[str, str]:
+    return {path.name: path.read_text(encoding="utf-8") for path in sorted(directory.glob("*.md"))}
 
-    def __init__(self, directory: Path) -> None:
-        self.documents = {path.name: path.read_text(encoding="utf-8") for path in sorted(directory.glob("*.md"))}
-        self._chunks = [(name, chunk) for name, text in self.documents.items() for chunk in chunk_text(text)]
+
+class KnowledgeBase:
+    """The fixture documents, chunked like uploads to `KnowledgeService` and searchable like it."""
+
+    def __init__(self, documents: dict[str, str], index: InMemoryHybridIndex) -> None:
+        self.documents = documents
+        self.index = index
+
+    @classmethod
+    async def load(
+        cls, directory: Path, embedder: EmbeddingProvider | None, cache_dir: Path | None = None
+    ) -> "KnowledgeBase":
+        documents = read_documents(directory)
+        cache = EmbeddingCache(cache_dir / "embeddings.json" if cache_dir is not None else None)
+        return cls(documents, await InMemoryHybridIndex(documents, embedder, cache).build())
+
+    @property
+    def embedding_model(self) -> str | None:
+        return self.index._embedder.model_name if self.index._embedder is not None else None
 
     def as_text(self) -> str:
         return "\n\n".join(f"=== {name} ===\n{text}" for name, text in self.documents.items())
 
-    def source_of(self, chunk: str) -> str:
-        return next((name for name, content in self._chunks if content == chunk), "?")
-
-    async def search(self, user_email: str, query: str, limit: int = 3) -> list[str]:
-        return rank_chunks(query, (chunk for _, chunk in self._chunks), limit)
+    async def search(self, user_email: str, query: str, limit: int = 3) -> list[RetrievedDoc]:
+        return await self.index.search(user_email, query, limit)
 
 
 # --- Usage recording --------------------------------------------------------------------------
@@ -88,12 +108,19 @@ def digest(*parts: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def pipeline_fingerprint(model: str, kb: KnowledgeBase) -> str:
-    """Changes whenever anything that can change a pipeline output changes: prompts and code, model, knowledge base."""
-    sources = [
-        Path(module.__file__ or "").read_text(encoding="utf-8") for module in (ai_agents_module, knowledge_module)
-    ]
-    return digest(HARNESS_VERSION, model, sources, kb.documents)
+PIPELINE_MODULES = (
+    ai_agents_module,
+    knowledge_module,
+    retrieval_module,
+    chunking_module,
+    hybrid_index_module,
+)
+
+
+def pipeline_fingerprint(model: str, kb: KnowledgeBase, rerank_model: str | None = None) -> str:
+    """Changes whenever anything that can change a pipeline output changes: prompts and code, models, knowledge base."""
+    sources = [Path(module.__file__ or "").read_text(encoding="utf-8") for module in PIPELINE_MODULES]
+    return digest(HARNESS_VERSION, model, kb.embedding_model, rerank_model, sources, kb.documents)
 
 
 class ResultCache:
@@ -115,9 +142,12 @@ class ResultCache:
 # --- Pipeline ---------------------------------------------------------------------------------
 
 
-async def run_pipeline(case: EvalCase, client: AsyncAnthropic, model: str, kb: KnowledgeBase) -> PipelineOutput:
+async def run_pipeline(
+    case: EvalCase, client: AsyncAnthropic, model: str, kb: KnowledgeBase, rerank_model: str | None = None
+) -> PipelineOutput:
     recorder = RecordingClient(client)
-    orchestrator = EmailOrchestrator(recorder.as_client(), model, kb)
+    reranker = LLMReranker(recorder.as_client(), rerank_model) if rerank_model else None
+    orchestrator = EmailOrchestrator(recorder.as_client(), model, kb, reranker=reranker)
     email = GmailMessage(id=case.id, thread_id=case.id, sender=case.sender, subject=case.subject, body=case.body)
 
     started = time.perf_counter()
@@ -136,7 +166,8 @@ async def run_pipeline(case: EvalCase, client: AsyncAnthropic, model: str, kb: K
         needs_review=result.review.needs_review,
         review_reason=result.review.reason,
         would_auto_send=result.action.name == "REPLY" and not result.review.needs_review,
-        retrieved_sources=[kb.source_of(doc.content) for doc in result.retrieved_docs],
+        retrieved_sources=[doc.filename or "?" for doc in result.retrieved_docs],
+        cited_sources=[c.filename or "?" for c in draft.citations] if draft else [],
         latency_s=round(latency, 3),
         calls=recorder.calls,
     )
