@@ -20,3 +20,4 @@ evals/.cache/
 evals/reports/*
 !evals/reports/.gitkeep
 CLAUDE.md
+CLAUDE.md
