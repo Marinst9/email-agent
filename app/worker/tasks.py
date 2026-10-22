@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import logging
 from functools import partial
 
 from celery import Task
-from __future__ import annotations
+
 from app.models.enums import InboundStatus
 from app.services.inbound import InboundEmailService
 from app.services.pipeline import EmailNotFoundError, EmailPipeline
