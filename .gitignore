@@ -19,3 +19,4 @@ chroma_db/
 evals/.cache/
 evals/reports/*
 !evals/reports/.gitkeep
+CLAUDE.md
